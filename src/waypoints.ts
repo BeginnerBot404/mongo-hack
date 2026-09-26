@@ -228,6 +228,14 @@ export async function resume(input: { objective_id?: string; agent: string }) {
     col("checkpoints").countDocuments({ objective_id: objectiveId }),
   ]);
 
+  const policySources = new Map(
+    (
+      await col("failures")
+        .find({ _id: { $in: policies.map((p) => p.from_failure_id) } }, { projection: { agent: 1 } })
+        .toArray()
+    ).map((f) => [String(f._id), f.agent as string]),
+  );
+
   const now = new Date();
   const previousAgent = objective.last_agent ?? (lastCheckpoint?.agent as string | undefined) ?? null;
   await col("resumes").insertOne({
@@ -258,7 +266,15 @@ export async function resume(input: { objective_id?: string; agent: string }) {
       agent: f.agent,
       created_at: f.created_at,
     })),
-    policies: policies.map((p) => ({ policy_id: p._id, rule: p.rule, class: p.class, version: p.version, from_failure_id: p.from_failure_id })),
+    policies: policies.map((p) => ({
+      policy_id: p._id,
+      rule: p.rule,
+      class: p.class,
+      version: p.version,
+      from_failure_id: p.from_failure_id,
+      from_failure_agent: policySources.get(String(p.from_failure_id)) ?? null,
+      adopted_by: p.agent ?? null,
+    })),
     resumed_by: input.agent,
     previous_agent: previousAgent,
     checkpoints_count: checkpointsCount,

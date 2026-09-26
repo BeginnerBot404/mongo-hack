@@ -129,8 +129,18 @@ function resultSummary(name: string, raw: string): string {
       const b = (j.bearings ?? []).map((x: any) => `${x.name} ${x.current ?? "?"}/${x.target}`).join(" ");
       const who = j.previous_agent ? ` from ${magenta(String(j.previous_agent))}` : "";
       const pol = Array.isArray(j.policies) && j.policies.length ? `  policies: ${j.policies.length}` : "";
-      const fails = Array.isArray(j.recent_failures) && j.recent_failures.length ? `  failures: ${j.recent_failures.length}` : "";
-      return `resumed${who}: ${b}${pol}${fails}  next: ${clip(String(j.next_action ?? "-"), 60)}`;
+      const fails = Array.isArray(j.recent_failures) && j.recent_failures.length
+        ? `  failures: ${j.recent_failures.map((f: any) => `${f.class}${f.agent ? "@" + f.agent : ""}`).join(", ")}`
+        : "";
+      const seq = j.last_checkpoint?.seq != null ? ` (checkpoint #${j.last_checkpoint.seq})` : "";
+      const lines = [`resumed${who}${seq}: ${b}${pol}${fails}  next: ${clip(String(j.next_action ?? "-"), 60)}`];
+      for (const t of j.open_threads ?? []) lines.push(dim(`      open: ${clip(String(t), 100)}`));
+      // Recursive Harnessing beat: rules learned from earlier failures, shown loudly.
+      for (const p of j.policies ?? []) {
+        const src = `from failure ${String(p.from_failure_id).slice(-6)}${p.from_failure_agent ? `, by ${p.from_failure_agent}` : ""}`;
+        lines.push(yellow(bold(`    ⚑ POLICY v${p.version} [${p.class}] (${src}): ${clip(String(p.rule), 110)}`)));
+      }
+      return lines.join("\n");
     }
     case "set_objective": return `objective_id ${j.objective_id}`;
     case "checkpoint": return `checkpoint #${j.seq}`;
@@ -138,7 +148,9 @@ function resultSummary(name: string, raw: string): string {
     case "log_failure": return `failure ${j.failure_id}${j.postmortem ? dim(" · postmortem: " + clip(typeof j.postmortem === "string" ? j.postmortem : JSON.stringify(j.postmortem), 60)) : ""}`;
     case "recall": {
       const hits = Array.isArray(j) ? j : j.hits ?? j.results ?? [];
-      return `${hits.length} hit(s)${hits[0] ? dim(" · " + clip(JSON.stringify(hits[0]), 70)) : ""}`;
+      const top = hits[0];
+      const who = top ? ` · top: ${top.kind ?? "?"} by ${magenta(String(top.agent ?? "?"))} ` : "";
+      return `${hits.length} hit(s)${who}${top ? dim(clip(String(top.text ?? JSON.stringify(top)), 80)) : ""}`;
     }
     default: return clip(raw, 100);
   }
@@ -189,7 +201,13 @@ async function main() {
     `You are the "${AGENT}" coding agent. You work through tools only; be terse between tool calls.\n` +
       `Your agent name for every Waypoints tool is "${AGENT}".\n\n${task}\n\n` +
       `Tool notes: read_file/write_file paths are relative to demo/fixture. write_file needs the FULL file content. ` +
-      `run_tests returns JSON pass/fail counts. Treat policies returned by resume as hard rules.`,
+      `run_tests returns JSON pass/fail counts. Treat policies returned by resume as hard rules.\n\n` +
+      `CROSS-AGENT MEMORY (required): after resume and BEFORE any write_file, call recall with kind "failure" ` +
+      `for the failure class of the next open thread (e.g. query "unit_conversion hoursFromMinutes minutes to hours"), ` +
+      `and for any class in recent_failures or policies you have not recalled yet. Then, before editing, write one line ` +
+      `of plain text starting with "MEMORY:" that names the earlier failure (its class and id) and the agent that ` +
+      `logged it, and how it shapes your fix, e.g. "MEMORY: failure 66f... [unit-conversion] logged by hermes -> ` +
+      `divide minutes by 60, not 100". Repeat recall + MEMORY line whenever you move to a new failure class.`,
   );
   const kickoff = FRESH
     ? `Start FRESH: call resume first only to read policies and recent failures, then call set_objective for a NEW objective (ignore any previous objective's progress). The fixture was reset to its buggy state.`
@@ -224,7 +242,12 @@ async function main() {
               lastModel = chosen;
             }
             const text = typeof msg.content === "string" ? msg.content : msg.content.map((p: any) => p.text ?? "").join("");
-            if (text.trim()) log(dim(`  💭 ${clip(text, 140)}`));
+            if (text.trim()) {
+              const mem = text.match(/MEMORY:[^\n]*/);
+              if (mem) log(yellow(bold(`  ✦ ${clip(mem[0], 180)}`)));
+              const rest = mem ? text.replace(mem[0], "") : text;
+              if (rest.trim()) log(dim(`  💭 ${clip(rest, 140)}`));
+            }
             for (const tc of msg.tool_calls ?? []) {
               pending.set(tc.id ?? "", { name: tc.name });
               const color = WAYPOINT_TOOLS.has(tc.name) ? magenta : blue;
