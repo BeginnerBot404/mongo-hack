@@ -24,8 +24,9 @@ export default function Nav() {
   }, [path]);
   const items: [string, string][] = [
     ["/live", "Live"],
-    ["/replay", "Replay"],
     ["/runs", "Runs"],
+    ["/playbook", "Playbook"],
+    ["/replay", "Replay"],
   ];
   const [dark, setDark] = useState(false);
   useEffect(() => setDark(document.documentElement.dataset.theme === "dark"), []);
@@ -38,7 +39,7 @@ export default function Nav() {
       localStorage.setItem("wp-theme", next ? "dark" : "light");
     } catch {}
   };
-  const on = (h: string) => path === h || (h === "/live" && path === "/");
+  const on = (h: string) => path === h || (h !== "/live" && path.startsWith(h + "/")) || (h === "/live" && path === "/");
   return (
     <nav className="shell">
       <Link href={`/live${q}`} className="mark">

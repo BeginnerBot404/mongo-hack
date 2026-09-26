@@ -42,7 +42,7 @@ function trimRaw(v: unknown, key = ""): unknown {
 }
 const compact = (v: unknown) => JSON.stringify(v).replace(/"([A-Za-z_][\w.]*)":/g, "$1:").replace(/,(?=[A-Za-z_"{[])/g, ", ");
 
-function useLive(objective: string | null, ready: boolean) {
+function useLive(objective: string | null, ready: boolean, series = true) {
   const [s, setS] = useState<LiveState>({ ...EMPTY, drafts: [], accounts: [], objectives: [] });
   const [raw, setRaw] = useState<Raw[]>([]);
   const [status, setStatus] = useState<"connecting" | "live" | "error">("connecting");
@@ -50,7 +50,7 @@ function useLive(objective: string | null, ready: boolean) {
   const k = useRef(0);
   useEffect(() => {
     if (!ready) return;
-    const es = new EventSource(`/api/stream?${dbQ()}series=1&${objective ? `objective=${encodeURIComponent(objective)}` : ""}`);
+    const es = new EventSource(`/api/stream?${dbQ()}${series ? "series=1&" : ""}${objective ? `objective=${encodeURIComponent(objective)}` : ""}`);
     es.addEventListener("snapshot", (e) => {
       const d = JSON.parse((e as MessageEvent).data);
       // never clear on a new batch: the series snapshot carries every batch since the run started
@@ -100,7 +100,7 @@ function useLive(objective: string | null, ready: boolean) {
     es.addEventListener("ping", () => setStatus("live"));
     es.addEventListener("error", () => setStatus("error"));
     return () => es.close();
-  }, [objective, ready]);
+  }, [objective, ready, series]);
   return { s, raw, status, loaded };
 }
 
@@ -515,6 +515,7 @@ function BatchDivider({ ob, prev, s, onOpen }: { ob: Doc; prev: Doc | null; s: L
           </>
         )}
       </span>
+      <a className="jbtn" href={`/runs/${ob._id}${dbQ() ? `?${dbQ().slice(0, -1)}` : ""}`}>open batch →</a>
       <Json doc={ob} title={`objectives · ${batchLabel(ob)}`} onOpen={onOpen} />
       <span className="dvl" />
     </div>
@@ -539,15 +540,38 @@ function BatchRates({ s, target, written }: { s: LiveState; target: number; writ
   );
 }
 
-export default function Live() {
+function RunHeader({ s, o, cls }: { s: LiveState; o: Doc; cls: string | null }) {
+  const st = batchStats(s, o);
+  const start = t(o.created_at);
+  const end = s.drafts.length ? t(s.drafts[s.drafts.length - 1].created_at) : start;
+  const v0 = versionAt(s.harness_config, start);
+  const v1 = versionAt(s.harness_config, end);
+  const hm = (x: number) => new Date(x).toTimeString().slice(0, 5);
+  return (
+    <span className="psub runhdr">
+      {o.campaign ? `${String(o.campaign)} · ` : ""}
+      {hm(start)}–{o.status === "completed" ? hm(end) : "now"} · first-try <b>{st.pass}/{st.n}</b> ({pct(st.rate)}) · {st.written} emails · playbook v{v0 ?? "?"} → v{v1 ?? "?"}
+      {cls && (
+        <>
+          {" "}· showing only <b className="bad">{cls}</b> <a href={location.pathname + (dbQ() ? `?${dbQ().slice(0, -1)}` : "")}>show all</a>
+        </>
+      )}
+    </span>
+  );
+}
+
+export default function Live({ objectiveId }: { objectiveId?: string } = {}) {
+  const detail = !!objectiveId;
   const [ready, setReady] = useState(false);
-  const [pin, setPin] = useState<string | null>(null);
+  const [pin, setPin] = useState<string | null>(objectiveId ?? null);
+  const [cls, setCls] = useState<string | null>(null);
   useEffect(() => {
     const q = new URLSearchParams(window.location.search);
-    setPin(q.get("objective"));
+    if (!objectiveId) setPin(q.get("objective"));
+    setCls(q.get("class"));
     setReady(true);
-  }, []);
-  const { s, status, loaded } = useLive(pin, ready);
+  }, [objectiveId]);
+  const { s, status, loaded } = useLive(pin, ready, !detail);
   const alive = useAlive(ready);
   const now = useNow(1000);
   const o = s.objective;
@@ -571,12 +595,14 @@ export default function Live() {
   const target = typeof end?.target === "number" ? end.target : 80;
 
   const items = useMemo(() => {
-    const out: Item[] = s.drafts.map((d) => ({ kind: "draft" as const, at: t(d.created_at), d }));
+    const drafts = cls ? s.drafts.filter((d) => (d.qa?.failures ?? []).some((f: Doc) => f.class === cls)) : s.drafts;
+    const out: Item[] = drafts.map((d) => ({ kind: "draft" as const, at: t(d.created_at), d }));
     const since = t(s.objectives[0]?.created_at ?? o?.created_at);
+    const until = detail && o?.status === "completed" ? Math.max(t(o.updated_at), ...s.drafts.map((d) => t(d.created_at))) + 30_000 : Infinity;
     s.objectives.forEach((ob, i) => out.push({ kind: "batch", at: t(ob.created_at), ob, prev: s.objectives[i - 1] ?? null }));
     for (const c of s.harness_config) {
-      if (c.change && t(c.created_at) >= since) out.push({ kind: "change", at: t(c.created_at), c });
-      if (c.outcome?.decided_at && t(c.outcome.decided_at) >= since) out.push({ kind: "verdict", at: t(c.outcome.decided_at), c });
+      if (c.change && t(c.created_at) >= since && t(c.created_at) <= until) out.push({ kind: "change", at: t(c.created_at), c });
+      if (c.outcome?.decided_at && t(c.outcome.decided_at) >= since && t(c.outcome.decided_at) <= until) out.push({ kind: "verdict", at: t(c.outcome.decided_at), c });
     }
     for (const r of s.resumes) {
       const ob = s.objectives.find((x) => x._id === r.objective_id);
@@ -590,7 +616,7 @@ export default function Live() {
     let n = 0;
     const out: Item[] = [];
     for (const it of items) {
-      if (it.kind === "draft" && ++n > limit) break;
+      if (it.kind === "draft" && ++n > (detail ? 100000 : limit)) break;
       out.push(it);
     }
     return { list: out, more: n > limit };
@@ -617,8 +643,8 @@ export default function Live() {
     <main className="console trace">
       <section className="waterfall">
         <div className="wfhead">
-          <h3>Trace</h3>
-          <span className="psub">one row per email · real steps from Atlas · newest first · click a row to expand, {"{ }"} for the raw document</span>
+          <h3>{detail && o ? `${batchLabel(o)} trace` : "Trace"}</h3>
+          {detail && o ? <RunHeader s={s} o={o} cls={cls} /> : <span className="psub">one row per email · real steps from Atlas · newest first · click a row to expand, {"{ }"} for the raw document</span>}
           <span className={`pill ${status === "live" ? "live" : "off"}`}>{status === "live" ? "● Atlas live" : status === "connecting" ? "○ connecting" : "○ reconnecting"}</span>
         </div>
         <div className="wflist">
@@ -685,7 +711,7 @@ export default function Live() {
           </div>
         </div>
         <BatchRates s={s} target={target} written={s.drafts.length} />
-        <RunControl alive={alive} />
+        {!detail && <RunControl alive={alive} />}
         <ShapePanel s={s} now={now} />
       </aside>
       <Drawer open={drawer} onClose={() => setDrawer(null)} />

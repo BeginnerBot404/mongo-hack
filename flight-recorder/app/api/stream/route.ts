@@ -112,11 +112,13 @@ export async function GET(request: Request) {
           { fullDocument: "updateLookup" },
         );
         // Open the stream before the snapshot so nothing written in between is lost (client dedupes by _id).
-        const first = await stream.tryNext();
+        // open the stream (tryNext) concurrently with the snapshot: the snapshot goes out as soon as it is read
+        const firstP = stream.tryNext();
         let snap = await snapshot(pinned, dbName, series);
         let currentId = (snap.objective as Document | null)?._id?.toString() ?? null;
         let currentUpdated = new Date(((snap.objective as Document | null)?.updated_at as Date | undefined) ?? 0);
         send("snapshot", snap);
+        const first = await firstP;
 
         const handle = async (ch: Document) => {
           const coll = ch.ns?.coll as string;

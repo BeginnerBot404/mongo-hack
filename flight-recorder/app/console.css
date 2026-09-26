@@ -332,3 +332,30 @@ nav.shell .navlinks a.on { background: var(--fg); color: var(--panel); }
 .divider.crash .dvt { background: var(--fail-bg); }
 html:has(main.console.trace), body:has(main.console.trace) { overflow: hidden; }
 main.console.runs { overflow: auto; height: calc(100vh - 58px); }
+/* ---- /playbook ---- */
+main.console.playbook { height: calc(100vh - 58px); overflow: auto; display: block; max-width: 1180px; margin: 0 auto; }
+.pbtop { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: var(--gap); margin-bottom: 20px; }
+.pbnow { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; box-shadow: var(--shadow-sm); }
+.pbnowrow { display: flex; flex-wrap: wrap; gap: 4px 18px; margin-top: 4px; font-family: var(--mono); font-size: 15px; }
+.pbnowrow em, .pbfacts em { font-style: normal; color: var(--soft); font-family: var(--mono); font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; margin-right: 6px; }
+.pbh { font-size: 24px; font-weight: 600; letter-spacing: -0.02em; text-transform: none; color: var(--fg); margin: 0 0 14px; }
+.pbcards { display: flex; flex-direction: column; gap: 14px; padding-bottom: 40px; }
+.pbcard { background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--self); border-radius: 10px; padding: 14px 20px; box-shadow: var(--shadow-sm); }
+.pbcard.v-kept { border-left-color: var(--ok); } .pbcard.v-undone, .pbcard.v-restore { border-left-color: var(--mid); } .pbcard.v-seed { border-left-color: var(--faint); }
+.pbcard header { display: flex; align-items: baseline; gap: 14px; }
+.pbv { font-family: var(--mono); font-size: 30px; font-weight: 600; letter-spacing: -0.02em; }
+.pbaxis { font-family: var(--mono); font-size: 16px; letter-spacing: 0.1em; color: var(--self); }
+.pbchip { font-family: var(--mono); font-size: 14px; padding: 2px 10px; border-radius: 999px; border: 1px solid var(--line); }
+.pbchip.kept { color: var(--ok); background: var(--ok-bg); } .pbchip.undone, .pbchip.restore { color: var(--mid); background: var(--mid-bg); }
+.pbchip.ontrial { color: var(--self); background: var(--self-bg); } .pbchip.seed { color: var(--soft); }
+.pbtime { margin-left: auto; font-family: var(--mono); color: var(--faint); }
+.pbwords { font-size: 20px; margin: 6px 0 2px; color: var(--fg); }
+.pbdiff { margin: 8px 0; display: flex; flex-direction: column; gap: 4px; }
+.pbline { font-size: 18px; line-height: 1.4; color: var(--body); }
+.pbline .sg { font-family: var(--mono); font-weight: 700; }
+.pbline .lbl { font-family: var(--mono); font-size: 13px; color: var(--soft); margin-right: 4px; }
+.pbline.splus .sg { color: var(--ok); } .pbline.sminus .sg { color: var(--fail); } .pbline.sminus { text-decoration: line-through; text-decoration-color: var(--faint); }
+.pbfacts { display: flex; flex-direction: column; gap: 3px; font-size: 16px; color: var(--body); border-top: 1px solid var(--line); padding-top: 8px; }
+.pbfacts a, .runhdr a, .rlink { color: var(--brand); }
+.rlink { text-decoration: none; }
+.runhdr b { color: var(--fg); }

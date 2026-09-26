@@ -71,8 +71,11 @@ export default async function Runs({ searchParams }: { searchParams: Promise<Rec
           {rows.map((r) => (
             <tr key={String(r.o._id)}>
               <td className="rtask">
+                <a className="rlink" href={`/runs/${String(r.o._id)}${sp.db ? `?db=${encodeURIComponent(sp.db)}` : ""}`}>
                 <b>{r.o.batch != null ? `Batch ${r.o.batch}` : String(r.o.task ?? (r.n ? "outreach" : "—"))}</b>
                 {r.o.campaign ? <span className="rsub"> · {String(r.o.campaign)}</span> : null}
+                <span className="rsub"> · open trace →</span>
+                </a>
                 <div className="rsub">{String(r.o.objective ?? "").slice(0, 90)}</div>
               </td>
               <td>{hm(r.o.created_at)}</td>
