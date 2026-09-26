@@ -50,10 +50,10 @@ h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.12em; color: 
 .barval { text-align: right; font-family: var(--mono); }
 
 /* ---- hero ---- */
-.hero { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; }
+.hero { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
 .tile { background: var(--panel); border: 2px solid var(--line); border-radius: 10px; padding: 8px 14px; }
 .tlabel { font-size: 15px; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 800; color: var(--soft); }
-.tnum { font-size: 52px; font-weight: 900; line-height: 1.05; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tnum { font-size: 46px; font-weight: 900; line-height: 1.05; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .tnum .arrow { color: var(--soft); margin: 0 10px; font-size: 38px; }
 .tnum .of { color: var(--soft); font-size: 34px; }
 .tnum .bad { color: var(--fail); } .tnum .good { color: var(--ok); } .tnum .neutral { color: var(--fg); }
@@ -121,7 +121,7 @@ h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.12em; color: 
 }
 
 /* ---- work (rubric) vs self (settings) ---- */
-.twocol { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.twocol { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
 .twocol .card { margin-bottom: 8px; }
 .h-work { color: #93c5fd; }
 .h-self { color: var(--warn); }

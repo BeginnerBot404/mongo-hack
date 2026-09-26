@@ -82,7 +82,7 @@ function bearingOf(cp: Doc | undefined, name?: string): { current: number | null
 export function fmtB(v: number | null | undefined, unit?: string): string {
   if (v === null || v === undefined || Number.isNaN(v)) return "?";
   const pctUnit = unit === "%" || unit === "pct" || unit === "percent";
-  const s = Number.isInteger(v) ? String(v) : Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 10 ? v.toFixed(1) : v.toFixed(2);
+  const s = Number.isInteger(v) ? String(v) : Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 10 ? v.toFixed(1) : Math.abs(v) < 1 ? v.toFixed(3) : v.toFixed(2);
   return pctUnit ? `${s}%` : s;
 }
 const lowerBetter = (dir: unknown) => typeof dir === "string" && /down|lower|min|decrease/i.test(dir);
@@ -377,7 +377,7 @@ function Route({ s, primary, target, unit, down }: { s: State; primary?: string;
   const cps = s.checkpoints;
   const W = 920;
   const H = 215;
-  const padL = 44, padR = 24, top = 52, bottom = 36;
+  const padL = 70, padR = 24, top = 52, bottom = 36;
   const vals = cps.map((c) => bearingOf(c, primary).current).filter((x): x is number => x !== null);
   // Goal is always drawn at the top; the far end is the worst value seen (with 10% headroom).
   const worst = down ? Math.max(target, ...vals) : Math.min(target, ...vals);
@@ -486,7 +486,7 @@ function ConfigCard({ c, s, primary, present }: { c: Doc; s: State; primary?: st
                 <span key={k} className={`pip ${k < since ? "on" : ""}`} />
               ))}
               <span>
-                checkpoint {Math.min(since, req)} of {req} · keep if bearing ≥ {c.probation.baseline_bearing} and no {c.probation.watch_class}
+                checkpoint {Math.min(since, req)} of {req} · keep if bearing ≥ {fmtB(c.probation.baseline_bearing)} and no {c.probation.watch_class}
               </span>
             </div>
           )}
@@ -746,7 +746,7 @@ export default function Page() {
             <div className="row wrap">
               {endState ? (
                 <span className="badge end">
-                  🔒 END STATE · {endState.bearing} = {endState.target} · IMMUTABLE
+                  🔒 END STATE · {pretty(endState.bearing)} {down ? "≤" : "≥"} {fmtB(endState.target, unit)} · IMMUTABLE
                 </span>
               ) : (
                 <span className="badge">end state: not set</span>
@@ -824,13 +824,13 @@ export default function Page() {
             <section className="twocol">
               <div>
                 <h2 className="h-work">what it's learning · rubric (the work)</h2>
-                {[...s.rubrics].reverse().slice(0, present ? 2 : 20).map((r) => (
+                {[...s.rubrics].reverse().slice(0, present ? 1 : 20).map((r) => (
                   <RubricCard key={r._id} r={r} parent={s.rubrics.find((x) => x.version === r.parent_version) ?? s.rubrics.find((x) => x.version === r.version - 1)} />
                 ))}
               </div>
               <div>
                 <h2 className="h-self">how it's learning · harness settings (itself)</h2>
-                {cfgCards.slice(0, present ? 2 : 20).map((c) => (
+                {cfgCards.slice(0, present ? 1 : 20).map((c) => (
                   <ConfigCard key={c._id} c={c} s={s} primary={primary} present={present} />
                 ))}
               </div>

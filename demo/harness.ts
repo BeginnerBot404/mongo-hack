@@ -1,11 +1,13 @@
-// The Waypoints harness: a LangGraph.js coding agent whose memory is the Waypoints MCP server (agent role).
-// The harness (not the model) owns the protocol: resume -> get_settings -> system prompt = fixed base prompt +
+// The Waypoints harness: a LangGraph.js agent whose memory is the Waypoints MCP server (agent role).
+// The harness (not the model) owns the protocol: resume -> get_settings -> system prompt = task pack's base prompt +
 // enabled fragment texts from harness_config (never model-written) -> work -> checkpoint with settings_version
-// after every test run -> on settings.reload: get_settings again and rebuild the prompt -> on tap: act.
+// after every measurement -> on settings.reload: get_settings again and rebuild the prompt -> on tap: act.
+// Task packs (demo/packs/): `sales` (default: deal-qualification rubric scored on held-out deals) and `invoice`.
 //
-//   bun run harness                 # resume the latest objective
-//   bun run harness --fresh         # new objective (fixture should be reset first)
-//   flags: --max-steps N (default 40)  --die-after N (SIGKILL self after N tool calls)
+//   bun run harness                 # resume the latest objective (sales)
+//   bun run harness --fresh         # new objective
+//   flags: --task sales|invoice  --max-steps N (sales: proposals, default 15; invoice: turns, default 40)
+//          --die-after N (SIGKILL self after N tool calls)
 //          --die-after-checkpoint N (SIGKILL self on the next tool result after the Nth checkpoint: mid-task, repeatable)
 //   env:   DEMO_MODEL=<openrouter slug>   DEMO_PROVIDER=gb10 (GB10_BASE_URL, GB10_MODEL, GB10_API_KEY)
 import { ChatOpenAI } from "@langchain/openai";
@@ -13,33 +15,21 @@ import { tool, type StructuredToolInterface } from "@langchain/core/tools";
 import { AIMessage, HumanMessage, SystemMessage, ToolMessage, type BaseMessage } from "@langchain/core/messages";
 import type { Runnable } from "@langchain/core/runnables";
 import { StateGraph, MessagesAnnotation, START, END } from "@langchain/langgraph";
-import { ToolNode, toolsCondition } from "@langchain/langgraph/prebuilt";
+import { ToolNode } from "@langchain/langgraph/prebuilt";
 import { MultiServerMCPClient } from "@langchain/mcp-adapters";
-import * as z from "zod";
-import { resolve, relative, dirname, join } from "node:path";
-import { mkdir } from "node:fs/promises";
+import { resolve } from "node:path";
 import { getFragments, SEED_SETTINGS, type Fragment } from "../src/fragments";
+import { bold, clip, cyan, dim, green, log, magenta, blue, red, yellow, parse, textOf } from "./term";
+import type { Counters, PackCtx, TaskPack } from "./packs/types";
+export { runTests, corruption } from "./packs/invoice";
 
 const AGENT = "waypoints-harness";
 const REPO = resolve(import.meta.dir, "..");
-const FIXTURE = join(REPO, "demo", "fixture");
-// GLM everywhere. Its skipped checkpoints and corrupt writes are caught by the harness in code, logged as failures
-// (skipped-checkpoint / corrupt-write), and the sentinel answers with a gated settings change.
+// GLM everywhere. Its skipped checkpoints etc. are caught by the harness in code, logged as failures,
+// and the sentinel answers with a gated settings change.
 const GLM = "z-ai/glm-5.3-flash";
 const DEFAULT_MODEL = GLM;
 const TAP_WAIT_MS = Number(process.env.TAP_WAIT_MS ?? 30000);
-
-const OBJECTIVE = {
-  objective: "Make every test in demo/fixture/invoice.test.ts pass by fixing bugs in invoice.ts",
-  bearings: [{ name: "tests_passing", target: 10, unit: "tests", current: 0 }],
-  waypoints: [
-    { title: "Baseline", done_when: "bun test has been run and every failing test is listed" },
-    { title: "Fix date + time bugs", done_when: "billableDays, hoursFromMinutes and totalHours tests pass" },
-    { title: "Fix money + paging bugs", done_when: "taxCents, invoiceTotal and paginate tests pass" },
-    { title: "All green", done_when: "all 10 tests pass" },
-  ],
-  end_state: { description: "All 10 invoice tests pass", bearing: "tests_passing", target: 10 },
-};
 
 // ---------- args ----------
 const argv = process.argv.slice(2);
@@ -49,104 +39,22 @@ const num = (name: string, dflt: number) => {
   const v = i >= 0 ? Number(argv[i + 1]) : NaN;
   return Number.isFinite(v) ? v : dflt;
 };
+const str = (name: string, dflt: string) => {
+  const i = argv.indexOf(name);
+  return i >= 0 && argv[i + 1] ? argv[i + 1]! : dflt;
+};
+const TASK = str("--task", "sales");
 const FRESH = flag("--fresh");
-const MAX_STEPS = num("--max-steps", 40);
+const MAX_STEPS = num("--max-steps", TASK === "sales" ? 15 : 40);
 const DIE_AFTER = num("--die-after", 0);
 const DIE_AFTER_CHECKPOINT = num("--die-after-checkpoint", 0); // SIGKILL on the first tool result after checkpoint #N
 
-// ---------- terminal log ----------
-const c = (code: number) => (s: string) => (process.stdout.isTTY ? `\x1b[${code}m${s}\x1b[0m` : s);
-const dim = c(2), bold = c(1), red = c(31), green = c(32), yellow = c(33), blue = c(34), magenta = c(35), cyan = c(36);
-const clip = (s: string, n = 110) => {
-  const one = s.replace(/\s+/g, " ").trim();
-  return one.length > n ? one.slice(0, n - 1) + "…" : one;
-};
 const WAYPOINT_TOOLS = new Set(["set_objective", "checkpoint", "resume", "log_decision", "log_failure", "recall", "get_settings", "list_policies"]);
-const log = (s: string) => console.log(s);
-
-// ---------- local tools (scoped to demo/fixture) ----------
-function scoped(p: string): string {
-  const abs = resolve(FIXTURE, p.replace(/^demo\/fixture\//, ""));
-  const rel = relative(FIXTURE, abs);
-  if (rel.startsWith("..") || rel === "" || resolve(abs) !== abs) throw new Error(`path outside demo/fixture: ${p}`);
-  return abs;
-}
-
-type TestReport = { pass: number; fail: number; total: number; all_green: boolean; failures: { test: string; detail: string }[] };
-
-export async function runTests(): Promise<TestReport> {
-  const proc = Bun.spawn(["bun", "test"], { cwd: FIXTURE, stdout: "pipe", stderr: "pipe", env: { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0" } });
-  const [out, err] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
-  await proc.exited;
-  const text = `${out}\n${err}`;
-  const pass = Number(text.match(/^\s*(\d+) pass/m)?.[1] ?? 0);
-  const fail = Number(text.match(/^\s*(\d+) fail/m)?.[1] ?? 0);
-  // bun prints each failure's error block *before* its "(fail) name" line.
-  const failures: TestReport["failures"] = [];
-  let block: string[] = [];
-  for (const line of text.split("\n")) {
-    const m = line.match(/^\(fail\) (.+?)(?: \[[\d.]+m?s\])?$/);
-    if (m) {
-      const keep = block.filter((l) => /error:|Expected|Received|^\s*[-+] /.test(l) && !/Expected\s+-|Received\s+\+/.test(l));
-      failures.push({ test: m[1]!, detail: keep.map((l) => l.trim()).slice(0, 8).join(" | ") });
-      block = [];
-    } else if (/^\(pass\)/.test(line)) block = [];
-    else block.push(line);
-  }
-  if (pass + fail === 0) failures.push({ test: "(no tests ran)", detail: clip(text, 600) });
-  return { pass, fail, total: pass + fail, all_green: fail === 0 && pass > 0, failures };
-}
-
-// The last test report, and whether a checkpoint is owed for it (required_tools enforcement).
-let lastReport: TestReport | null = null;
-let checkpointOwed = false;
-const runTestsTool = tool(async () => {
-  lastReport = await runTests();
-  checkpointOwed = true;
-  return JSON.stringify(lastReport);
-}, {
-  name: "run_tests",
-  description: "Run `bun test` in demo/fixture. Returns JSON {pass, fail, total, all_green, failures:[{test, detail}]}.",
-  schema: z.object({}),
-});
-
-const readFileTool = tool(async ({ path }) => await Bun.file(scoped(path)).text(), {
-  name: "read_file",
-  description: "Read a file inside demo/fixture (e.g. 'invoice.ts', 'invoice.test.ts').",
-  schema: z.object({ path: z.string().describe("path relative to demo/fixture") }),
-});
-
-// Corrupt-write guard (deterministic): the new invoice.ts must parse and keep every export of the original.
-const TEMPLATE_EXPORTS = new Bun.Transpiler({ loader: "ts" }).scan(await Bun.file(join(REPO, "demo", "fixture-template", "invoice.ts")).text()).exports;
-export function corruption(content: string): string | null {
-  let exports: string[];
-  try { exports = new Bun.Transpiler({ loader: "ts" }).scan(content).exports; } catch (e: any) { return `does not parse: ${clip(String(e?.message ?? e), 120)}`; }
-  const missing = TEMPLATE_EXPORTS.filter((x) => !exports.includes(x));
-  return missing.length ? `drops export(s) ${missing.join(", ")}` : null;
-}
-let onCorruptWrite: (why: string) => Promise<void> = async () => {};
-const writeFileTool = tool(
-  async ({ path, content }) => {
-    const abs = scoped(path);
-    if (relative(FIXTURE, abs) !== "invoice.ts") throw new Error("only invoice.ts is writable: fix bugs in invoice.ts");
-    const bad = corruption(content);
-    if (bad) {
-      await onCorruptWrite(bad);
-      return `write REJECTED by the harness (corrupt write: new invoice.ts ${bad}); invoice.ts is unchanged. Write the FULL file again.`;
-    }
-    await mkdir(dirname(abs), { recursive: true });
-    await Bun.write(abs, content);
-    return `wrote ${relative(FIXTURE, abs)} (${content.length} bytes)`;
-  },
-  {
-    name: "write_file",
-    description: "Overwrite demo/fixture/invoice.ts with the FULL new content. Every other file is read-only.",
-    schema: z.object({ path: z.string().describe("path relative to demo/fixture"), content: z.string() }),
-  },
-);
 
 // ---------- one-line summaries for the demo log ----------
-function argSummary(name: string, a: Record<string, any>): string {
+function argSummary(pack: TaskPack, name: string, a: Record<string, any>): string {
+  const p = pack.argSummary(name, a);
+  if (p != null) return p;
   switch (name) {
     case "set_objective": return clip(a.objective ?? "", 80);
     case "checkpoint": return `${(a.bearings_current ?? []).map((b: any) => `${b.name}=${b.current}`).join(" ")} next: ${clip(a.next_action ?? "", 60)}`;
@@ -154,7 +62,6 @@ function argSummary(name: string, a: Record<string, any>): string {
     case "log_failure": return `[${a.class}] ${clip(a.failure ?? "", 80)}`;
     case "recall": return `"${clip(a.query ?? "", 70)}"${a.kind ? ` kind=${a.kind}` : ""}`;
     case "resume": return a.objective_id ? `objective ${a.objective_id}` : "latest objective";
-    case "read_file": case "write_file": return a.path ?? "";
     default: return clip(JSON.stringify(a), 80);
   }
 }
@@ -166,15 +73,13 @@ function policyLines(j: any): string[] {
   });
 }
 
-function resultSummary(name: string, raw: string): string {
+function resultSummary(pack: TaskPack, name: string, raw: string): string {
+  const p = pack.resultSummary(name, raw);
+  if (p != null) return p;
   let j: any;
   try { j = JSON.parse(raw); } catch { return clip(raw, 100); }
   if (j?.error) return red(clip(String(j.error), 100));
   switch (name) {
-    case "run_tests": {
-      const s = `${j.pass}/${j.total} passing`;
-      return j.all_green ? green(bold(s + " ✔ all green")) : (j.fail ? yellow(s) : s) + dim(`  failing: ${clip(j.failures.map((f: any) => f.test.split(" > ").pop()).join(", "), 80)}`);
-    }
     case "resume": {
       if (!j.objective) return yellow("no objective found");
       const b = (j.bearings ?? []).map((x: any) => `${x.name} ${x.current ?? "?"}/${x.target}`).join(" ");
@@ -185,7 +90,7 @@ function resultSummary(name: string, raw: string): string {
         : "";
       const seq = j.last_checkpoint?.seq != null ? ` (checkpoint #${j.last_checkpoint.seq})` : "";
       const lines = [`resumed${who}${seq}: ${b}${pol}${fails}  next: ${clip(String(j.next_action ?? "-"), 60)}`];
-      for (const t of j.open_threads ?? []) lines.push(dim(`      open: ${clip(String(t), 100)}`));
+      for (const t of (j.open_threads ?? []).slice(0, 3)) lines.push(dim(`      open: ${clip(String(t), 100)}`));
       lines.push(...policyLines(j)); // Recursive Harnessing beat: rules learned from earlier failures, shown loudly.
       return lines.join("\n");
     }
@@ -203,34 +108,12 @@ function resultSummary(name: string, raw: string): string {
   }
 }
 
-/** MCP tool results come back as a string or as content blocks; flatten to text. */
-function textOf(r: unknown): string {
-  if (typeof r === "string") return r;
-  if (Array.isArray(r)) return r.map(textOf).join("");
-  if (r && typeof r === "object") {
-    const o = r as any;
-    if (typeof o.text === "string") return o.text;
-    if (o.content !== undefined) return textOf(o.content);
-  }
-  return JSON.stringify(r);
-}
-const parse = (s: string): any => { try { return JSON.parse(s); } catch { return { error: s }; } };
-
 // ---------- settings (harness_config) ----------
 type Settings = { version: number; status: string; model: string | null; fragments: Fragment[]; ids: string[]; required: string[]; local: boolean; outcome?: { verdict: string; why: string } | null };
 
-const BASE_PROMPT = (task: string) =>
-  `You are the "${AGENT}" coding agent. You work through tools only; be terse between tool calls.\n` +
-  `Your agent name for every Waypoints tool is "${AGENT}".\n\n${task}\n\n` +
-  `Tool notes: read_file/write_file paths are relative to demo/fixture. write_file needs the FULL file content. ` +
-  `run_tests returns JSON pass/fail counts. Treat policies returned by resume as hard rules.\n\n` +
-  `CROSS-AGENT MEMORY: if resume returned recent_failures or policies, call recall with kind "failure" for a class ` +
-  `before fixing its first bug, then write one line of plain text starting with "MEMORY:" naming the earlier ` +
-  `failure (class and id), the agent that logged it, and how it shapes your fix. If recall finds nothing, skip the MEMORY line.`;
-
-function systemPrompt(task: string, s: Settings): string {
+function systemPrompt(base: string, s: Settings): string {
   const rules = s.fragments.map((f) => `- [${f.id}] ${f.title}: ${f.text}`).join("\n");
-  return `${BASE_PROMPT(task)}\n\n## Harness settings v${s.version} (${s.status}): standing rules\n${rules || "- (none)"}`;
+  return `${base}\n\n## Harness settings v${s.version} (${s.status}): standing rules\n${rules || "- (none)"}`;
 }
 
 // ---------- models ----------
@@ -241,16 +124,17 @@ function chat(model: string, baseURL: string, apiKey: string, fast = { maxRetrie
 function buildLlm(settingsModel: string | null, tools: StructuredToolInterface[]): { llm: Llm; label: string } {
   const orKey = process.env.OPENROUTER_API_KEY!;
   const OR = "https://openrouter.ai/api/v1";
-  const gb10 = process.env.DEMO_PROVIDER === "gb10" || (!process.env.DEMO_MODEL && settingsModel === "gb10");
+  const gb10 = process.env.DEMO_PROVIDER === "gb10";
   if (gb10) {
     // GB10 (local vLLM serving GLM) first; OpenRouter's GLM if it is unreachable.
     const m = process.env.GB10_MODEL || "gb10";
     // GB10 decodes ~30 tok/s: a stuck turn fails over to OpenRouter after 45s instead of 2 x 90s.
-    const primary = chat(m, process.env.GB10_BASE_URL || "http://localhost:8000/v1", process.env.GB10_API_KEY || "none", { maxRetries: 0, timeout: 45_000 }).bindTools(tools);
-    return { llm: primary.withFallbacks([chat(GLM, OR, orKey).bindTools(tools)]) as unknown as Llm, label: `gb10:${m} → fallback openrouter:${GLM}` };
+    const primary = chat(m, process.env.GB10_BASE_URL || "http://localhost:8000/v1", process.env.GB10_API_KEY || "none", { maxRetries: 0, timeout: 45_000 }).bindTools(tools, { parallel_tool_calls: false });
+    return { llm: primary.withFallbacks([chat(GLM, OR, orKey).bindTools(tools, { parallel_tool_calls: false })]) as unknown as Llm, label: `gb10:${m} → fallback openrouter:${GLM}` };
   }
-  const id = process.env.DEMO_MODEL || (settingsModel && settingsModel !== "gb10" ? settingsModel : DEFAULT_MODEL);
-  return { llm: chat(id, OR, orKey).bindTools(tools) as unknown as Llm, label: `openrouter:${id}` };
+  // GLM only: a non-GLM settings model (Sonnet/GPT from an old config) is ignored.
+  const id = process.env.DEMO_MODEL || (settingsModel && settingsModel.startsWith("z-ai/") ? settingsModel : DEFAULT_MODEL);
+  return { llm: chat(id, OR, orKey).bindTools(tools, { parallel_tool_calls: false }) as unknown as Llm, label: `openrouter:${id}` };
 }
 /** Which endpoint served a turn, from the response's model name. */
 const endpointOf = (name: string) => (process.env.GB10_MODEL && name === process.env.GB10_MODEL ? `gb10:${name}` : `openrouter:${name}`);
@@ -258,6 +142,8 @@ const endpointOf = (name: string) => (process.env.GB10_MODEL && name === process
 // ---------- main ----------
 async function main() {
   if (!process.env.OPENROUTER_API_KEY) throw new Error("OPENROUTER_API_KEY is not set (bun loads .env from the repo root)");
+  if (TASK !== "sales" && TASK !== "invoice") throw new Error(`--task must be sales or invoice (got ${TASK})`);
+  const t0 = Date.now();
 
   const env = Object.fromEntries(Object.entries(process.env).filter((e): e is [string, string] => typeof e[1] === "string"));
   let settings: Settings | null = null;
@@ -293,6 +179,23 @@ async function main() {
     return parse(textOf(await t.invoke(args)));
   };
 
+  // Discipline per settings version (this process), counters defined by the pack.
+  const stats = new Map<number, Counters>();
+  const stat = () => {
+    const v = settings?.version ?? 0;
+    if (!stats.has(v)) stats.set(v, {});
+    return stats.get(v)!;
+  };
+  let objectiveId: string | null = null;
+  const ctx: PackCtx = {
+    agent: AGENT, objectiveId: () => objectiveId, settingsVersion: () => settings?.version,
+    call, stat, fresh: FRESH, maxSteps: MAX_STEPS,
+  };
+  const pack: TaskPack = TASK === "invoice"
+    ? await (await import("./packs/invoice")).invoicePack(ctx)
+    : await (await import("./packs/sales")).salesPack(ctx);
+  const disciplineLine = () => "discipline by settings version: " + [...stats.entries()].map(([v, x]) => pack.discipline(v, x)).join(" → ");
+
   // ----- settings: get_settings from the server; old server without it -> local seed v1, never reloads -----
   async function loadSettings(): Promise<Settings> {
     if (!has("get_settings")) {
@@ -305,8 +208,6 @@ async function main() {
     return { version: j.version, status: j.status, model: j.settings?.model ?? null, fragments, ids: j.settings?.prompt_fragments ?? fragments.map((f) => f.id), required: j.settings?.required_tools ?? [], local: false, outcome: j.outcome ?? null };
   }
 
-  const task = await Bun.file(join(REPO, "demo", "task.md")).text();
-  const localTools = [runTestsTool, readFileTool, writeFileTool];
   let tools: StructuredToolInterface[] = [];
   let system = new SystemMessage("");
   let model = { llm: null as unknown as Llm, label: "" };
@@ -314,7 +215,7 @@ async function main() {
 
   function applySettings(s: Settings) {
     settings = s;
-    system = new SystemMessage(systemPrompt(task, s));
+    system = new SystemMessage(systemPrompt(pack.basePrompt, s));
     const key = `${process.env.DEMO_PROVIDER ?? ""}|${process.env.DEMO_MODEL ?? ""}|${s.model ?? ""}`;
     if (key !== modelKey) {
       model = buildLlm(s.model, tools);
@@ -345,35 +246,12 @@ async function main() {
       (newRules.length ? ` New standing rule(s), now in your system prompt: ${newRules.join(" | ")}` : "");
   }
 
-  // Discipline per settings version (this process): test runs, skipped checkpoints, writes, corrupt writes.
-  const stats = new Map<number, { tests: number; skipped: number; writes: number; corrupt: number }>();
-  const stat = () => {
-    const v = settings?.version ?? 0;
-    if (!stats.has(v)) stats.set(v, { tests: 0, skipped: 0, writes: 0, corrupt: 0 });
-    return stats.get(v)!;
-  };
-  const disciplineLine = () =>
-    "discipline by settings version: " +
-    [...stats.entries()].map(([v, x]) => `v${v} ${x.skipped} skipped checkpoint(s)/${x.tests} test runs, ${x.corrupt} corrupt/${x.writes} writes`).join(" → ");
-  onCorruptWrite = async (why: string) => {
-    stat().corrupt++;
-    log(red(bold(`  ⛨ corrupt write rejected (${why}) → log_failure [corrupt_write]`)));
-    if (!objectiveId) return;
-    await call("log_failure", {
-      objective_id: objectiveId,
-      failure: `Model's full-file write of invoice.ts was corrupt: ${why}. The harness rejected it.`,
-      class: "corrupt_write",
-      context: `write_file under settings v${settings?.version}; test run ${testRuns}`,
-      agent: AGENT,
-    });
-  };
-
   let endStateShown = false;
   function showEndState(j: any) {
     const e = j?.end_state ?? j?.objective?.end_state;
     if (endStateShown || !e) return;
     endStateShown = true;
-    log(bold(`◎ END STATE: ${e.description} (${e.bearing} ≥ ${e.target}) — immutable`));
+    log(bold(pack.endStateLine(e)));
   }
 
   /** Act on checkpoint/resume output: print the tap, run recall if asked, reload settings if the server says so. */
@@ -394,10 +272,10 @@ async function main() {
       const comp = tap.components ? dim(`  sim ${tap.components.similarity?.toFixed?.(2)} · recur ${tap.components.recurrence?.toFixed?.(2)} · trend ${tap.components.trend?.toFixed?.(2)}`) : "";
       log(red(bold(`  ▲ TAP risk ${Number(tap.risk).toFixed(2)} → ${action}${after}`)) + comp);
       if (action === "recall" && objectiveId) {
-        const q = "regression: a fix broke a test that was passing before";
+        const q = pack.name === "sales" ? "rubric change that overfit or lowered holdout AUC" : "regression: a fix broke a test that was passing before";
         log(`${magenta("→ recall       ")} "${q}" kind=failure ${dim("(tap)")}`);
         const r = await call("recall", { query: q, kind: "failure", objective_id: objectiveId });
-        log(`  ${dim("↳")} ${resultSummary("recall", JSON.stringify(r))}`);
+        log(`  ${dim("↳")} ${resultSummary(pack, "recall", JSON.stringify(r))}`);
         notes.push(`Sentinel tap (risk ${tap.risk}) asked you to recall. Recall results: ${clip(JSON.stringify(r), 900)}`);
       } else if (action === "adapt" && objectiveId) {
         const pol = await call("list_policies", { objective_id: objectiveId });
@@ -414,64 +292,84 @@ async function main() {
     return notes;
   }
 
-  // Checkpoint as the model sees it: same schema, but the harness reads settings/tap from the response first.
-  let objectiveId: string | null = null;
+  // Checkpoint as the model sees it: same schema, but the harness stamps measured bearings and reads settings/tap first.
   let lastBearing: number | null = null;
-  let checkpointsAfterTests = 0, testRuns = 0, skipped = 0, awaitingCheckpoint = false;
+  let checkpointsSeen = 0;
   let doCheckpoint: (args: any) => Promise<string> = async () => "{}";
   let enforced = 0;
   let carryNotes: string[] = [];
   const wrapped = mcpTools.map((t) => {
     if (t.name !== "checkpoint") return t;
     doCheckpoint = async (args: any) => {
-        checkpointOwed = false;
-        // The bearing is measured, not claimed: stamp tests_passing from the harness's last real test run.
-        if (lastReport) {
-          const claimed = (args.bearings_current ?? []).find((b: any) => b.name === "tests_passing")?.current;
-          if (claimed !== lastReport.pass) {
-            args = { ...args, bearings_current: [{ name: "tests_passing", current: lastReport.pass }] };
-            log(dim(`  ⛨ bearing stamped from the last test run: tests_passing=${lastReport.pass}${claimed == null ? " (model omitted it)" : ` (model said ${claimed})`}`));
+      pack.owed = false;
+      // The bearing is measured, not claimed: stamp it from the harness's last real measurement.
+      const m = pack.measured();
+      if (m) {
+        const claimed = (args.bearings_current ?? []).find((b: any) => b.name === pack.bearing)?.current;
+        if (claimed !== m[0]!.current && pack.name === "invoice")
+          log(dim(`  ⛨ bearing stamped from the last test run: ${pack.bearing}=${m[0]!.current}${claimed == null ? " (model omitted it)" : ` (model said ${claimed})`}`));
+        args = { ...args, bearings_current: m };
+      }
+      const raw = textOf(await t.invoke(args));
+      const j = parse(raw);
+      if (j.error) return raw;
+      checkpointsSeen++;
+      if (args.objective_id) objectiveId = args.objective_id;
+      const bearing = (args.bearings_current ?? []).find((b: any) => b.name === pack.bearing)?.current;
+      const dropped = typeof bearing === "number" && lastBearing != null && bearing < lastBearing;
+      if (dropped) log(red(bold(`  ▼ BEARING DROP ${pack.bearing} ${lastBearing} → ${bearing}`)));
+      if (typeof bearing === "number") lastBearing = bearing;
+      const vBefore = settings?.version;
+      const notes = await handleServerSignals(j, objectiveId);
+      // A drop means the sentinel is likely scoring right now; wait briefly for its settings change so the
+      // model's next step already runs under the new rules (read-only get_settings poll; the tap doc arrives with the next checkpoint).
+      if (dropped && settings?.version === vBefore && has("get_settings") && settings && !settings.local) {
+        log(dim(`  … waiting up to ${TAP_WAIT_MS / 1000}s for the sentinel`));
+        const w0 = Date.now();
+        while (Date.now() - w0 < TAP_WAIT_MS) {
+          await Bun.sleep(1500);
+          const g = await call("get_settings", {});
+          if (g.version != null && g.version !== settings.version) {
+            log(red(bold(`  ▲ TAP ${clip(String(g.reason?.summary ?? "sentinel"), 90)} → adjust_settings (v${g.version}, ${g.status})`)));
+            const n = await reload("tap");
+            if (n) notes.push(n);
+            break;
           }
         }
-        const raw = textOf(await t.invoke(args));
-        const j = parse(raw);
-        if (j.error) return raw;
-        if (args.objective_id) objectiveId = args.objective_id;
-        const bearing = (args.bearings_current ?? []).find((b: any) => b.name === "tests_passing")?.current;
-        const dropped = typeof bearing === "number" && lastBearing != null && bearing < lastBearing;
-        if (dropped) log(red(bold(`  ▼ BEARING DROP tests_passing ${lastBearing} → ${bearing}`)));
-        if (typeof bearing === "number") lastBearing = bearing;
-        const vBefore = settings?.version;
-        const notes = await handleServerSignals(j, objectiveId);
-        // A drop means the sentinel is likely scoring right now; wait briefly for its settings change so the
-        // model's next edit already runs under the new rules (read-only get_settings poll, then one resume for the tap).
-        if (dropped && settings?.version === vBefore && has("get_settings") && settings && !settings.local) {
-          log(dim(`  … waiting up to ${TAP_WAIT_MS / 1000}s for the sentinel`));
-          const t0 = Date.now();
-          while (Date.now() - t0 < TAP_WAIT_MS) {
-            await Bun.sleep(1500);
-            const g = await call("get_settings", {});
-            if (g.version != null && g.version !== settings.version) {
-              // No resume call here: a resume is a restart marker on the timeline. The tap doc arrives with the next checkpoint.
-              log(red(bold(`  ▲ TAP ${clip(String(g.reason?.summary ?? "sentinel"), 90)} → adjust_settings (v${g.version}, ${g.status})`)));
-              const n = await reload("tap");
-              if (n) notes.push(n);
-              break;
-            }
-          }
-        }
-        return notes.length ? JSON.stringify({ ...j, harness_notes: notes }) : raw;
+      }
+      return notes.length ? JSON.stringify({ ...j, harness_notes: notes }) : raw;
     };
     return tool(doCheckpoint, { name: t.name, description: t.description, schema: t.schema as any }) as unknown as StructuredToolInterface;
   });
-  tools = [...wrapped, ...localTools];
+  tools = [...wrapped, ...pack.tools];
+
+  /** required_tools: checkpoint -> the harness writes the owed checkpoint itself (and logs skipped_checkpoint when `skipped`). */
+  async function harnessCheckpoint(why: string, skipped: boolean) {
+    const body = pack.autoCheckpoint();
+    if (skipped) {
+      enforced++;
+      stat().skipped = (stat().skipped ?? 0) + 1;
+      log(yellow(bold(`  ⛨ harness checkpoint (required_tools: checkpoint; model went to ${why}) → log_failure [skipped_checkpoint]`)));
+      await call("log_failure", {
+        objective_id: objectiveId,
+        failure: `Model skipped the checkpoint after ${pack.skippedWhat()} and went to ${why}.`,
+        class: "skipped_checkpoint",
+        context: `${pack.skippedWhat()} under settings v${settings?.version}; harness wrote the checkpoint (required_tools)`,
+        agent: AGENT,
+      });
+    } else log(dim(`  ⛨ harness checkpoint (${why})`));
+    const raw = await doCheckpoint({ objective_id: objectiveId, ...body, agent: AGENT });
+    const j = parse(raw);
+    log(`  ${dim("↳")} ${resultSummary(pack, "checkpoint", raw)}`);
+    if (Array.isArray(j.harness_notes)) carryNotes.push(...j.harness_notes);
+  }
 
   // ----- protocol, harness-side: (set_objective) -> resume -> get_settings -> build prompt -----
-  log(bold(cyan(`\n▶ waypoints harness · agent=${AGENT} · ${FRESH ? "fresh objective" : "resume"} · max ${MAX_STEPS} steps`)));
+  log(bold(cyan(`\n▶ waypoints harness · task=${pack.name} · agent=${AGENT} · ${FRESH ? "fresh objective" : "resume"} · max ${MAX_STEPS} ${pack.name === "sales" ? "proposals" : "steps"}`)));
   const boot = await loadSettings();
   if (FRESH) {
-    log(`${magenta("→ set_objective".padEnd(15))} ${clip(OBJECTIVE.objective, 80)}`);
-    const so = await call("set_objective", { ...OBJECTIVE, agent: AGENT });
+    log(`${magenta("→ set_objective".padEnd(15))} ${clip(pack.objective.objective, 80)}`);
+    const so = await call("set_objective", { ...pack.objective, agent: AGENT });
     if (so.error) throw new Error(`set_objective: ${so.error}`);
     log(`  ${dim("↳")} objective_id ${so.objective_id}`);
     objectiveId = String(so.objective_id);
@@ -480,146 +378,117 @@ async function main() {
   const resumed = await call("resume", { ...(objectiveId ? { objective_id: objectiveId } : {}), agent: AGENT, ...(boot.local ? {} : { settings_version: boot.version }) });
   if (resumed.error) throw new Error(`resume: ${resumed.error} (run with --fresh to start an objective)`);
   objectiveId = String(resumed.objective_id);
+  const resumedText = `${resumed.objective?.objective ?? resumed.objective ?? ""}`;
+  if (pack.name === "sales" && resumedText && !/\[sales\]|B2B deals/i.test(resumedText))
+    throw new Error(`latest objective is not a sales objective ("${clip(resumedText, 60)}"): run with --fresh (or --task invoice)`);
   showEndState(resumed);
-  if (!endStateShown) showEndState({ end_state: OBJECTIVE.end_state });
-  log(`  ${dim("↳")} ${resultSummary("resume", JSON.stringify(resumed))}`);
-  lastBearing = (resumed.bearings ?? []).find((b: any) => b.name === "tests_passing")?.current ?? null;
+  if (!endStateShown) showEndState({ end_state: pack.objective.end_state });
+  log(`  ${dim("↳")} ${resultSummary(pack, "resume", JSON.stringify(resumed))}`);
+  lastBearing = (resumed.bearings ?? []).find((b: any) => b.name === pack.bearing)?.current ?? null;
   log(`${magenta("→ get_settings".padEnd(15))} ${boot.local ? dim("(server has no get_settings: local seed)") : ""}`);
   log(`  ${dim("↳")} v${boot.version} (${boot.status}): ${boot.ids.join(", ")}`);
   applySettings(boot);
   const kickNotes = await handleServerSignals({ tap: resumed.tap, settings: resumed.settings }, objectiveId);
+  const packKick = await pack.init(ctx, resumed);
 
   const kickoff =
-    (FRESH ? `New objective started (fixture reset to its buggy state). ` : `You are taking over from a harness that was killed mid-task. Continue exactly where it left off. `) +
+    (FRESH ? `New objective started. ` : `You are taking over from a harness that was killed mid-task. Continue exactly where it left off. `) +
     `The harness already called resume for you; here is its result:\n${JSON.stringify(resumed)}\n` +
-    (kickNotes.length ? `\nHarness notes: ${kickNotes.join(" ")}\n` : "") +
+    (kickNotes.length ? `\nHarness notes: ${kickNotes.join(" ")}\n` : "") + packKick +
     `\nobjective_id = ${objectiveId}. Go.`;
 
-  let toolCalls = 0, turn = 0, checkpointsSeen = 0;
+  let toolCalls = 0, turn = 0, nudges = 0, stopReason = "";
   const graph = new StateGraph(MessagesAnnotation)
     .addNode("agent", async (s) => {
       const extra = carryNotes.length ? [new HumanMessage(`Harness notes: ${carryNotes.join(" ")}`)] : [];
       carryNotes = [];
+      const ts = Date.now();
       const msg = await model.llm.invoke([system, ...s.messages, ...extra]);
-      // required_tools: checkpoint -> if the model moves on from a test run without checkpointing, the harness does it.
+      (msg as any).__ms = Date.now() - ts;
       const next = msg.tool_calls?.[0]?.name;
-      if (checkpointOwed && next !== "checkpoint" && lastReport && settings?.required.includes("checkpoint")) {
-        enforced++;
-        const r = lastReport;
-        stat().skipped++;
-        log(yellow(bold(`  ⛨ harness checkpoint (required_tools: checkpoint; model went to ${next ?? "stop"}) tests_passing=${r.pass} → log_failure [skipped_checkpoint]`)));
-        await call("log_failure", {
-          objective_id: objectiveId,
-          failure: `Model skipped the checkpoint after test run ${testRuns} (${r.pass}/${r.total} passing) and went to ${next ?? "stop"}.`,
-          class: "skipped_checkpoint",
-          context: `test run ${testRuns} under settings v${settings?.version}; harness wrote the checkpoint (required_tools)`,
-          agent: AGENT,
-        });
-        const raw = await doCheckpoint({
-          objective_id: objectiveId,
-          state_summary: `Harness auto-checkpoint after a test run: ${r.pass}/${r.total} passing (model skipped checkpoint).`,
-          open_threads: r.failures.map((f) => f.test),
-          next_action: r.all_green ? "Objective complete." : `Fix: ${r.failures[0]?.test ?? "remaining failures"}`,
-          bearings_current: [{ name: "tests_passing", current: r.pass }],
-          agent: AGENT,
-        });
-        const j = parse(raw);
-        log(`  ${dim("↳")} ${resultSummary("checkpoint", raw)}`);
-        if (Array.isArray(j.harness_notes)) carryNotes.push(...j.harness_notes);
+      // required_tools: checkpoint -> if the model moves on from a measurement without checkpointing, the harness does it.
+      if (pack.owed && next !== "checkpoint" && pack.measured() && settings?.required.includes("checkpoint")) await harnessCheckpoint(next ?? "stop", true);
+      // The model may not stop on its own before the end state (sales): nudge it back to work.
+      if (!msg.tool_calls?.length && pack.name === "sales" && !pack.stop() && nudges < 3) {
+        nudges++;
+        return { messages: [...extra, msg, new HumanMessage("The end state is not reached yet. Continue: form one hypothesis, then propose_rubric.")] };
       }
-      return { messages: [msg] };
+      return { messages: [...extra, msg] };
     })
     .addNode("tools", new ToolNode(tools))
+    // After each tool round: stop at the end state / step budget; write the owed checkpoint first.
+    .addNode("gate", async () => {
+      if (pack.stop()) {
+        if (pack.owed && pack.measured()) await harnessCheckpoint("end of run", false);
+        stopReason = "stop";
+      }
+      return { messages: [] };
+    })
     .addEdge(START, "agent")
-    .addConditionalEdges("agent", toolsCondition, ["tools", END])
-    .addEdge("tools", "agent")
+    .addConditionalEdges("agent", (s) => {
+      const lastMsg = s.messages[s.messages.length - 1];
+      if (lastMsg instanceof AIMessage && lastMsg.tool_calls?.length) return "tools";
+      if (lastMsg instanceof HumanMessage) return "agent";
+      return END;
+    }, ["tools", "agent", END])
+    .addEdge("tools", "gate")
+    .addConditionalEdges("gate", () => (stopReason ? END : "agent"), ["agent", END])
     .compile();
 
   const pending = new Map<string, { name: string }>();
-  let green_ = false;
   try {
-    const stream = await graph.stream({ messages: [new HumanMessage(kickoff)] as BaseMessage[] }, { streamMode: "updates", recursionLimit: MAX_STEPS * 2 + 1 });
+    const stream = await graph.stream({ messages: [new HumanMessage(kickoff)] as BaseMessage[] }, { streamMode: "updates", recursionLimit: pack.recursionLimit });
     for await (const update of stream) {
       for (const [node, patch] of Object.entries(update as Record<string, { messages?: BaseMessage[] }>)) {
         for (const msg of patch?.messages ?? []) {
           if (node === "agent" && msg instanceof AIMessage) {
             turn++;
-            log(dim(`  ◆ turn ${turn} · ${endpointOf(String(msg.response_metadata?.model_name ?? msg.response_metadata?.model ?? "?"))} · settings v${(settings as Settings | null)?.version}`));
+            const secs = ((msg as any).__ms ?? 0) / 1000;
+            log(dim(`  ◆ turn ${turn} · ${endpointOf(String(msg.response_metadata?.model_name ?? msg.response_metadata?.model ?? "?"))} · ${secs.toFixed(1)}s · settings v${(settings as Settings | null)?.version}`));
             const text = typeof msg.content === "string" ? msg.content : msg.content.map((p: any) => p.text ?? "").join("");
             if (text.trim()) {
               const mem = text.match(/MEMORY:[^\n]*/);
               if (mem) log(yellow(bold(`  ✦ ${clip(mem[0], 180)}`)));
               const rest = mem ? text.replace(mem[0], "") : text;
-              if (rest.trim()) log(dim(`  💭 ${clip(rest, 140)}`));
+              const th = rest.trim() ? pack.thought(rest) : null;
+              if (th) log(dim(`  💭 ${clip(th, 140)}`));
             }
             for (const tc of msg.tool_calls ?? []) {
-              if (awaitingCheckpoint && tc.name !== "checkpoint") skipped++;
-              if (tc.name === "checkpoint" && awaitingCheckpoint) checkpointsAfterTests++;
-              awaitingCheckpoint = false;
               pending.set(tc.id ?? "", { name: tc.name });
               const color = WAYPOINT_TOOLS.has(tc.name) ? magenta : blue;
-              log(`${color("→ " + tc.name.padEnd(13))} ${argSummary(tc.name, tc.args as any)}`);
+              log(`${color("→ " + tc.name.padEnd(13))} ${argSummary(pack, tc.name, tc.args as any)}`);
             }
           } else if (msg instanceof ToolMessage) {
             const name = pending.get(msg.tool_call_id)?.name ?? msg.name ?? "?";
             const raw = typeof msg.content === "string" ? msg.content : msg.content.map((p: any) => p.text ?? "").join("");
-            const summary = msg.status === "error" ? red(clip(raw, 110)) : resultSummary(name, raw);
+            const summary = msg.status === "error" ? red(clip(raw, 110)) : resultSummary(pack, name, raw);
             log(`  ${dim("↳")} ${summary}`);
-            if (name === "write_file" && !/REJECTED/.test(raw)) stat().writes++;
-            if (name === "run_tests") {
-              stat().tests++;
-              testRuns++;
-              awaitingCheckpoint = true;
-              try { green_ = JSON.parse(raw).all_green === true; } catch {}
-            }
+            pack.onToolResult?.(name, raw);
             toolCalls++;
             if ((DIE_AFTER && toolCalls >= DIE_AFTER) || (DIE_AFTER_CHECKPOINT && name !== "checkpoint" && checkpointsSeen >= DIE_AFTER_CHECKPOINT)) {
               log(red(bold(`\n✖ ${DIE_AFTER ? `--die-after ${DIE_AFTER}` : `--die-after-checkpoint ${DIE_AFTER_CHECKPOINT}`}: kill -9 self (pid ${process.pid})`)));
               process.kill(process.pid, "SIGKILL");
             }
-            if (name === "checkpoint") checkpointsSeen++;
           }
         }
       }
     }
   } catch (e: any) {
-    if (e?.name === "GraphRecursionError") log(yellow(`\n■ stopped: hit --max-steps ${MAX_STEPS}`));
+    if (e?.name === "GraphRecursionError") log(yellow(`\n■ stopped: hit the step limit`));
     else {
       await mcp.close().catch(() => {});
       throw e;
     }
   }
-  // Probation needs checkpoints under the new settings. If the task finished first, the harness verifies the suite
-  // (a real test run + checkpoint) until the sentinel rules, so the verdict lands on stage instead of next session.
-  for (let i = 0; green_ && settings && (settings as Settings).status === "probation" && i < 3; i++) {
-    await reload("probation"); // the sentinel may already have ruled on the model's own checkpoints
-    if ((settings as Settings).status !== "probation") break;
-    const s0 = settings as Settings;
-    const r = await runTests();
-    stat().tests++;
-    log(`${blue("→ run_tests    ")} ${dim(`(harness verification, v${s0.version} on probation)`)}`);
-    log(`  ${dim("↳")} ${resultSummary("run_tests", JSON.stringify(r))}`);
-    const raw = await doCheckpoint({
-      objective_id: objectiveId,
-      state_summary: `Harness verification run while settings v${s0.version} is on probation: ${r.pass}/${r.total} passing.`,
-      open_threads: r.failures.map((f) => f.test),
-      next_action: r.all_green ? "Objective complete." : `Fix: ${r.failures[0]?.test}`,
-      bearings_current: [{ name: "tests_passing", current: r.pass }],
-      agent: AGENT,
-    });
-    log(`${magenta("→ checkpoint   ")} tests_passing=${r.pass}`);
-    log(`  ${dim("↳")} ${resultSummary("checkpoint", raw)}`);
-    for (let t = 0; t < 8 && (settings as Settings).status === "probation" && (settings as Settings).version === s0.version; t++) {
-      await Bun.sleep(1000);
-      await reload("probation");
-    }
-  }
+  await pack.afterRun?.(doCheckpoint, reload, () => (settings as Settings).status, () => (settings as Settings).version);
+  if (settings && (settings as Settings).status === "probation") await reload("end of run").catch(() => null);
   await mcp.close().catch(() => {});
-  if (awaitingCheckpoint) skipped++;
+  const fin = pack.finish();
   log(dim(`\n  ${disciplineLine()}`));
-  log(dim(`  checkpoint discipline: ${checkpointsAfterTests}/${testRuns} test runs followed by a model checkpoint${skipped ? `, ${skipped} skipped` : ""}${enforced ? `, ${enforced} enforced by the harness` : ""}`));
-  log(green_ ? green(bold(`■ done: all tests green after ${toolCalls} tool calls`)) : yellow(`■ finished after ${toolCalls} tool calls (tests not all green)`));
-  process.exit(green_ ? 0 : 1);
+  for (const x of fin.extra ?? []) log(dim(`  ${x}`));
+  if (enforced) log(dim(`  ${enforced} checkpoint(s) enforced by the harness`));
+  log(fin.line + dim(`  · ${toolCalls} tool calls · ${turn} turns · ${Math.round((Date.now() - t0) / 1000)}s`));
+  process.exit(fin.ok ? 0 : 1);
 }
 
 if (import.meta.main) {
