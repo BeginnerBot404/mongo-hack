@@ -10,7 +10,7 @@ Spec both harnesses follow: `demo/task.md`. Bearing: `tests_passing` (target 10)
    - `--fresh`: new objective.
    - `--max-steps N`: step limit.
    - `--die-after N`: SIGKILL itself; fallback demo without Hermes.
-   - `DEMO_MODEL=<slug>`: override `openrouter/auto`.
+   - `DEMO_MODEL=<slug>`: override `openrouter/auto` (default; auto-router restricted to `anthropic/claude-sonnet-5` and `openai/gpt-5.5`).
    - `WAYPOINTS_DEBUG=1`: show server stderr.
 
 Hermes runs with an isolated `HERMES_HOME` (`demo/hermes/.home`, gitignored), built from `demo/hermes/config.yaml`. It never touches `~/.hermes/config.yaml`.

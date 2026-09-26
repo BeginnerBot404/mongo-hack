@@ -29,6 +29,7 @@ const num = (name: string, dflt: number) => {
 const FRESH = flag("--fresh");
 const MAX_STEPS = num("--max-steps", 40);
 const DIE_AFTER = num("--die-after", 0);
+const ROUTER_CANDIDATES = ["anthropic/claude-sonnet-5", "openai/gpt-5.5"];
 
 // ---------- terminal log ----------
 const c = (code: number) => (s: string) => (process.stdout.isTTY ? `\x1b[${code}m${s}\x1b[0m` : s);
@@ -173,8 +174,8 @@ async function main() {
   const modelId = process.env.DEMO_MODEL || "openrouter/auto";
   const modelKwargs: Record<string, unknown> = { session_id: `waypoints-${AGENT}-${process.pid}` };
   if (modelId === "openrouter/auto") {
-    // Keep the auto router on strong tool-calling models.
-    modelKwargs.plugins = [{ id: "auto-router", allowed_models: ["anthropic/claude-sonnet-*", "anthropic/claude-haiku-*", "openai/gpt-5.5", "google/gemini-3*-flash"] }];
+    // Keep the auto router, but only let it choose between strong tool-callers (IDs verified on /api/v1/models).
+    modelKwargs.plugins = [{ id: "auto-router", allowed_models: ROUTER_CANDIDATES }];
   }
   const llm = new ChatOpenAI({
     model: modelId,
@@ -204,7 +205,7 @@ async function main() {
     .addEdge("tools", "agent")
     .compile();
 
-  log(bold(cyan(`\n▶ waypoints · harness=${AGENT} · model=${modelId} · ${FRESH ? "fresh objective" : "resume"} · max ${MAX_STEPS} steps\n`)));
+  log(bold(cyan(`\n▶ waypoints · harness=${AGENT} · model=${modelId}${modelId === "openrouter/auto" ? ` [${ROUTER_CANDIDATES.join(" | ")}]` : ""} · ${FRESH ? "fresh objective" : "resume"} · max ${MAX_STEPS} steps\n`)));
 
   const pending = new Map<string, { name: string }>();
   let green_ = false;
