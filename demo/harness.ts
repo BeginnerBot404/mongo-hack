@@ -222,7 +222,7 @@ function systemPrompt(task: string, s: Settings): string {
 // ---------- models ----------
 type Llm = Runnable<BaseMessage[], AIMessage>;
 function chat(model: string, baseURL: string, apiKey: string) {
-  return new ChatOpenAI({ model, apiKey, configuration: { baseURL }, maxRetries: 1, timeout: 90_000 });
+  return new ChatOpenAI({ model, apiKey, configuration: { baseURL }, maxRetries: 1, timeout: 90_000, maxTokens: 3000 });
 }
 function buildLlm(settingsModel: string | null, tools: StructuredToolInterface[]): { llm: Llm; label: string } {
   const orKey = process.env.OPENROUTER_API_KEY!;
@@ -530,7 +530,8 @@ async function main() {
 
 if (import.meta.main) {
   main().catch((e) => {
-    console.error(red(`\n✖ ${e?.stack ?? e}`));
+    const detail = e?.status ? ` ${e.status} ${JSON.stringify(e.error ?? e.message ?? "")}` : "";
+    console.error(red(`\n✖${detail} ${e?.stack ?? e}`));
     process.exit(2);
   });
 }
