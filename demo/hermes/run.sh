@@ -22,6 +22,10 @@ Run tests with: bun test (in the cwd). Edit only invoice.ts.
 HARD RULE: the tool call right after every bun test is mcp__waypoints__checkpoint with bearings_current
 (tests_passing = the pass count). No other action in between. You may be killed at any moment; the last
 checkpoint is all the next agent will see.
+File tool paths are absolute: $REPO/demo/fixture/invoice.ts and $REPO/demo/fixture/invoice.test.ts.
+SPEED (you have ~60s before a possible kill): be terse, no narration. Waypoints (MCP) tools go ONE per turn, never
+batched with anything. Turn 1 = resume only. Turn 2 = read both files in parallel. Then set_objective (if resume found
+none), then bun test. log_failure/adapt one per turn. Skip recall unless resume returned prior failures.
 
 $(cat "$REPO/demo/task.md")"
 
