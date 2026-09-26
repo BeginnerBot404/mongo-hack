@@ -144,7 +144,7 @@ async function askJev(summary: Document): Promise<Document | null> {
           },
           { role: "user", content: JSON.stringify(summary) },
         ],
-        max_tokens: 200,
+        max_tokens: 1000, // jev-router may route to a reasoning model; 200 truncated the JSON
       },
       { timeout: 5000, maxRetries: 0 },
     );
