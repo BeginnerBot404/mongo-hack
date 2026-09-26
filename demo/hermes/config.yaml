@@ -1,0 +1,22 @@
+# Hermes Agent config for the Waypoints demo. run.sh copies this into an ISOLATED
+# HERMES_HOME (demo/hermes/.home), so the user's ~/.hermes/config.yaml is never touched.
+# ${VAR} values are interpolated by Hermes from the environment run.sh exports.
+model:
+  provider: openrouter
+  default: anthropic/claude-sonnet-5
+  base_url: https://openrouter.ai/api/v1
+
+agent:
+  max_turns: 60
+
+terminal:
+  backend: local        # the user's global config uses docker; the demo needs the host fixture
+  cwd: .
+
+mcp_servers:
+  waypoints:
+    command: bun
+    args: ["run", "src/server.ts"]
+    cwd: "${WAYPOINTS_REPO}"   # bun auto-loads the repo .env (MONGODB_URI, VOYAGE_API_KEY) from here
+    timeout: 120
+    connect_timeout: 60
