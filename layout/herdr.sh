@@ -5,8 +5,8 @@
 #   │                            │ view:prompt  (system     │
 #   │  harness                   │   prompt + settings diff)│
 #   │  (command pre-typed,       ├──────────────────────────┤
-#   │   NOT executed)            │ view:rubric  (rubric +   │
-#   │                            │   holdout metrics diff)  │
+#   │   NOT executed)            │ view:drafts  (latest      │
+#   │                            │   draft + QA verdict)    │
 #   │                            ├──────────────────────────┤
 #   │                            │ view:atlas   (raw change │
 #   │                            │   stream, all colls)     │
@@ -20,10 +20,11 @@ set -euo pipefail
 
 SESSION="${WAYPOINTS_HERDR_SESSION:-waypoints}"
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-DBARG="${VIEW_DB:+ --db $VIEW_DB}"
-HARNESS_CMD="${HARNESS_CMD:-bun run harness --fresh --die-after-checkpoint 3}"
+VIEW_DB="${VIEW_DB:-waypoints}"
+DBARG=" --db $VIEW_DB"
+HARNESS_CMD="${HARNESS_CMD:-bun run harness --fresh}"
 PROMPT_CMD="${PROMPT_CMD:-bun run view:prompt$DBARG}"
-RUBRIC_CMD="${RUBRIC_CMD:-bun run view:rubric$DBARG}"
+DRAFTS_CMD="${DRAFTS_CMD:-bun run view:drafts$DBARG}"
 ATLAS_CMD="${ATLAS_CMD:-bun run view:atlas$DBARG}"
 SENTINEL_CMD="${SENTINEL_CMD:-bun run sentinel}"
 
@@ -62,7 +63,7 @@ atlas=$(h pane split "$rubric" --direction down --ratio 0.55 --cwd "$ROOT_DIR" |
 
 h pane rename "$harness" "harness" >/dev/null
 h pane rename "$prompt" "system prompt (harness_config)" >/dev/null
-h pane rename "$rubric" "rubric (rubrics)" >/dev/null
+h pane rename "$rubric" "drafts (QA gate)" >/dev/null
 h pane rename "$atlas" "Atlas change stream" >/dev/null
 
 # Sentinel: its own unfocused tab, running in the background.
@@ -73,7 +74,7 @@ sentinel=$(jq -r '.result.root_pane.pane_id // .result.pane.pane_id // empty' <<
 sleep 0.8 # let the shells reach their prompts
 h pane send-text "$harness" "$HARNESS_CMD" >/dev/null
 h pane run "$prompt" "$PROMPT_CMD" >/dev/null
-h pane run "$rubric" "$RUBRIC_CMD" >/dev/null
+h pane run "$rubric" "$DRAFTS_CMD" >/dev/null
 h pane run "$atlas" "$ATLAS_CMD" >/dev/null
 if [[ -n "$sentinel" ]]; then
   h pane rename "$sentinel" sentinel >/dev/null || true
