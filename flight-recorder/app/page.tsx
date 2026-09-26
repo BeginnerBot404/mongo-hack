@@ -8,6 +8,7 @@ type Doc = Record<string, any>;
 type State = {
   objective: Doc | null;
   harness_config: Doc[];
+  rubrics: Doc[];
   checkpoints: Doc[];
   decisions: Doc[];
   failures: Doc[];
@@ -16,13 +17,14 @@ type State = {
   taps: Doc[];
   events: Doc[];
 };
-const LISTS = ["harness_config", "checkpoints", "decisions", "failures", "resumes", "policies", "taps", "events"] as const;
+const LISTS = ["harness_config", "rubrics", "checkpoints", "decisions", "failures", "resumes", "policies", "taps", "events"] as const;
 type ListKey = (typeof LISTS)[number];
-const EMPTY: State = { objective: null, harness_config: [], checkpoints: [], decisions: [], failures: [], resumes: [], policies: [], taps: [], events: [] };
+const EMPTY: State = { objective: null, harness_config: [], rubrics: [], checkpoints: [], decisions: [], failures: [], resumes: [], policies: [], taps: [], events: [] };
 type Change = { coll: string; op: string; id: string; doc: Doc | null };
 
 const t = (d: unknown) => new Date(String(d ?? 0)).getTime();
 const hhmmss = (d: unknown) => new Date(typeof d === "number" ? d : String(d ?? 0)).toTimeString().slice(0, 8);
+const hhmm = (ms: number) => new Date(ms).toTimeString().slice(0, 5);
 const one = (s: unknown) => String(s ?? "").replace(/\s+/g, " ").trim();
 const num = (x: unknown, d = 2) => (typeof x === "number" ? x.toFixed(d) : "?");
 const VCOL = ["#60a5fa", "#fbbf24", "#34d399", "#f472b6", "#c084fc", "#fb923c"];
@@ -45,8 +47,9 @@ function reduce(s: State, ch: Change): State {
   const key = ch.coll as ListKey;
   if (ch.op === "delete") return { ...s, [key]: s[key].filter((d) => d._id !== ch.id) };
   if (!ch.doc) return s;
-  if (key !== "harness_config" && (!s.objective || ch.doc.objective_id !== s.objective._id)) return s;
-  return { ...s, [key]: upsert(s[key], ch.doc, key === "harness_config" ? "version" : "created_at") };
+  const global = key === "harness_config";
+  if (!global && (!s.objective || ch.doc.objective_id !== s.objective._id)) return s;
+  return { ...s, [key]: upsert(s[key], ch.doc, global || key === "rubrics" ? "version" : "created_at") };
 }
 
 function currentConfig(cfgs: Doc[]): Doc | null {
@@ -75,6 +78,17 @@ function bearingOf(cp: Doc | undefined, name?: string): { current: number | null
   const b = (name ? snap.find((x) => x.name === name) : undefined) ?? snap[0];
   return { current: typeof b?.current === "number" ? b.current : null, target: typeof b?.target === "number" ? b.target : null };
 }
+/** Format a bearing value: integers as-is, decimals with 2 places (or 1 if large), % unit appended. */
+export function fmtB(v: number | null | undefined, unit?: string): string {
+  if (v === null || v === undefined || Number.isNaN(v)) return "?";
+  const pctUnit = unit === "%" || unit === "pct" || unit === "percent";
+  const s = Number.isInteger(v) ? String(v) : Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 10 ? v.toFixed(1) : v.toFixed(2);
+  return pctUnit ? `${s}%` : s;
+}
+const lowerBetter = (dir: unknown) => typeof dir === "string" && /down|lower|min|decrease/i.test(dir);
+const reached = (v: number | null, target: number, down: boolean) => v !== null && (down ? v <= target : v >= target);
+const worse = (a: number, b: number, down: boolean) => (down ? b > a : b < a);
+const pretty = (name?: string) => String(name ?? "bearing").replace(/_/g, " ");
 
 /** Settings version in force at time `at` (by harness_config created_at ordering). */
 function versionAt(cfgs: Doc[], at: number): number | null {
@@ -87,22 +101,24 @@ function failureVersion(cfgs: Doc[], f: Doc): number | null {
   return m ? Number(m[1]) : versionAt(cfgs, t(f.created_at));
 }
 
+const fclass = (f: Doc) => String(f?.class ?? "").replace(/-/g, "_");
+
 // ---------- moments (banners) ----------
 type Moment = { key: string; kind: string; title: string; sub?: string; bars?: Doc; at: number };
 
-function moments(s: State, primary?: string): Moment[] {
+function moments(s: State, primary?: string, unit?: string, down = false): Moment[] {
   const out: Moment[] = [];
   const cps = s.checkpoints;
   for (const r of s.resumes) {
     if (r.from_checkpoint_seq == null) continue;
     const cp = cps.find((c) => c.seq === r.from_checkpoint_seq);
     const b = bearingOf(cp, primary);
-    out.push({ key: `res:${r._id}`, kind: "resumed", title: `⟳ RESUMED FROM ATLAS @ checkpoint #${r.from_checkpoint_seq}`, sub: `${b.current ?? "?"}/${b.target ?? "?"} tests · state, bearing and next action rebuilt from Atlas`, at: t(r.created_at) });
+    out.push({ key: `res:${r._id}`, kind: "resumed", title: `⟳ RESUMED FROM ATLAS @ checkpoint #${r.from_checkpoint_seq}`, sub: `${pretty(primary)} ${fmtB(b.current, unit)} · state, bearing and next action rebuilt from Atlas`, at: t(r.created_at) });
   }
   for (const f of s.failures) {
-    if (f.class !== "regression") continue;
-    const m = /from (\d+) to (\d+)/.exec(String(f.failure ?? ""));
-    out.push({ key: `reg:${f._id}`, kind: "regression", title: `▼ REGRESSION ${m ? `${m[1]} → ${m[2]}` : ""}`, sub: "the obvious fix broke a passing test · server logged it itself", at: t(f.created_at) });
+    if (fclass(f) !== "regression") continue;
+    const m = /from (-?[\d.]+%?) to (-?[\d.]+%?)/.exec(String(f.failure ?? ""));
+    out.push({ key: `reg:${f._id}`, kind: "regression", title: `▼ REGRESSION ${m ? `${m[1]} → ${m[2]}` : ""}`, sub: "a change made the bearing worse · the server logged it itself", at: t(f.created_at) });
   }
   for (const tp of s.taps) {
     if (!tp.decision?.tap) continue;
@@ -120,23 +136,28 @@ function moments(s: State, primary?: string): Moment[] {
         at: t(c.outcome.decided_at),
       });
   }
+  for (const r of s.rubrics) {
+    const flags: string[] = r.flags ?? [];
+    if (flags.some((x) => /overfit/.test(x)))
+      out.push({ key: `rub:${r._id}`, kind: "regression", title: `⚠ OVERFIT · rubric v${r.version}`, sub: `gap ${num(r.gap)} train→holdout · ${one(r.change_summary)}`, at: t(r.created_at) });
+  }
   const last = cps[cps.length - 1];
   const lb = bearingOf(last, primary);
-  if (last && lb.current !== null && lb.target !== null && lb.current >= lb.target)
-    out.push({ key: `green:${last._id}`, kind: "kept", title: `✔ ALL GREEN ${lb.current}/${lb.target}`, sub: "end state reached · destination never changed", at: t(last.created_at) });
+  if (last && lb.current !== null && lb.target !== null && reached(lb.current, lb.target, down))
+    out.push({ key: `green:${last._id}`, kind: "kept", title: `✔ END STATE REACHED · ${fmtB(lb.current, unit)}`, sub: "end state reached · destination never changed", at: t(last.created_at) });
   return out.sort((a, b) => a.at - b.at);
 }
 
 // ---------- narration ----------
 type Line = { key: string; at: number; cls: string; text: string };
-function narrate(s: State, present: boolean, primary?: string): Line[] {
+function narrate(s: State, present: boolean, primary?: string, unit?: string): Line[] {
   const out: Line[] = [];
   for (const c of s.checkpoints) {
     const b = bearingOf(c, primary);
-    out.push({ key: c._id, at: t(c.created_at), cls: "cp", text: `checkpoint #${c.seq} · ${b.current ?? "?"}/${b.target ?? "?"} · ${one(c.next_action)}` });
+    out.push({ key: c._id, at: t(c.created_at), cls: "cp", text: `checkpoint #${c.seq} · ${fmtB(b.current, unit)} · ${one(c.next_action)}` });
   }
   if (!present) for (const d of s.decisions) out.push({ key: d._id, at: t(d.created_at), cls: "dec", text: `decided: ${one(d.decision)}` });
-  for (const f of s.failures) out.push({ key: f._id, at: t(f.created_at), cls: f.class === "regression" ? "fail" : f.class === "skipped_checkpoint" || f.class === "corrupt_write" ? "warn" : "fail2", text: `✗ ${f.class}: ${one(f.failure)}` });
+  for (const f of s.failures) out.push({ key: f._id, at: t(f.created_at), cls: fclass(f) === "regression" ? "fail" : fclass(f) === "skipped_checkpoint" || fclass(f) === "corrupt_write" ? "warn" : "fail2", text: `✗ ${f.class}: ${one(f.failure)}` });
   for (const r of s.resumes) out.push({ key: r._id, at: t(r.created_at), cls: "res", text: r.from_checkpoint_seq != null ? `⟳ resumed from Atlas @ checkpoint #${r.from_checkpoint_seq}` : "◎ fresh start" });
   for (const p of s.policies) out.push({ key: p._id, at: t(p.created_at), cls: "pol", text: `★ policy [${p.class}]: ${one(p.rule)}` });
   for (const tp of s.taps) out.push({ key: tp._id, at: t(tp.created_at), cls: tp.decision?.tap ? "tap" : "dim", text: `▲ tap risk ${num(tp.risk)} → ${tp.decision?.tap ? tp.decision.action : "no tap"}` });
@@ -149,16 +170,59 @@ function narrate(s: State, present: boolean, primary?: string): Line[] {
 }
 
 // ---------- data hooks ----------
+type Params = { present: boolean; objective: string | null; fixture: boolean; replay: boolean; speed: number; hours: number };
+
+// ---------- replay over real Atlas history ----------
+type RunSummary = { id: string; title: string; at: number; startVersion: number | null; endVersion: number | null; first: number | null; last: number | null; unit?: string; cps: number; failures: Record<string, number> };
+export type ReplayInfo = { from: number; to: number; speed: number; done: boolean; runs: RunSummary[] };
+
+function buildReplay(h: Record<string, Doc[]>) {
+  const items: { at: number; coll: string; doc: Doc }[] = [];
+  for (const o of h.objectives ?? []) items.push({ at: t(o.created_at), coll: "objectives", doc: o });
+  for (const coll of ["checkpoints", "decisions", "failures", "resumes", "policies", "taps", "events", "rubrics"])
+    for (const d of h[coll] ?? []) items.push({ at: t(d.created_at), coll, doc: d });
+  for (const coll of ["harness_config"])
+    for (const d of h[coll] ?? []) {
+      const at = t(d.created_at);
+      if (d.outcome?.decided_at) {
+        items.push({ at, coll, doc: { ...d, outcome: null, status: d.probation ? "probation" : "active" } });
+        items.push({ at: t(d.outcome.decided_at), coll, doc: d });
+      } else items.push({ at, coll, doc: d });
+    }
+  items.sort((a, b) => a.at - b.at);
+  const objs = h.objectives ?? [];
+  const cfgs = h.harness_config ?? [];
+  const runs: RunSummary[] = objs.map((o) => {
+    const name = o.end_state?.bearing ?? o.bearings?.[0]?.name;
+    const unit = ((o.bearings ?? []) as Doc[]).find((b) => b.name === name)?.unit;
+    const cps = (h.checkpoints ?? []).filter((c) => c.objective_id === o._id);
+    const vals = cps.map((c) => bearingOf(c, name).current).filter((x): x is number => x !== null);
+    const failures: Record<string, number> = {};
+    for (const f of h.failures ?? []) if (f.objective_id === o._id) failures[f.class] = (failures[f.class] ?? 0) + 1;
+    const lastAt = cps.length ? t(cps[cps.length - 1].created_at) : t(o.created_at);
+    return { id: o._id, title: one(o.objective), at: t(o.created_at), startVersion: versionAt(cfgs, t(o.created_at)), endVersion: versionAt(cfgs, lastAt), first: vals[0] ?? null, last: vals[vals.length - 1] ?? null, unit, cps: cps.length, failures };
+  });
+  return { items, runs };
+}
+
 function useParams() {
-  const [p, setP] = useState<{ present: boolean; objective: string | null; fixture: boolean }>({ present: true, objective: null, fixture: false });
+  const [p, setP] = useState<Params>({ present: true, objective: null, fixture: false, replay: false, speed: 20, hours: 12 });
   useEffect(() => {
     const q = new URLSearchParams(window.location.search);
-    setP({ present: q.get("present") !== "0", objective: q.get("objective"), fixture: q.get("demoFixture") === "1" });
+    setP({
+      present: q.get("present") !== "0",
+      objective: q.get("objective"),
+      fixture: q.get("demoFixture") === "1",
+      replay: q.get("replay") === "1",
+      speed: Math.max(1, Number(q.get("speed") ?? 20) || 20),
+      hours: Math.max(0.1, Number(q.get("hours") ?? 12) || 12),
+    });
   }, []);
   return p;
 }
 
-function useStream(objective: string | null, fx: boolean, ready: boolean) {
+function useStream(objective: string | null, fx: boolean, ready: boolean, replay?: { speed: number; hours: number }) {
+  const [rp, setRp] = useState<ReplayInfo | null>(null);
   const [s, setS] = useState<State>(EMPTY);
   const [status, setStatus] = useState<"connecting" | "live" | "error">("connecting");
   const [loaded, setLoaded] = useState(false);
@@ -166,6 +230,41 @@ function useStream(objective: string | null, fx: boolean, ready: boolean) {
   const [fxAlive, setFxAlive] = useState<boolean | null>(null);
   useEffect(() => {
     if (!ready) return;
+    if (replay) {
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      let stop = false;
+      (async () => {
+        const h = await (await fetch(`/api/history?hours=${replay.hours}`, { cache: "no-store" })).json();
+        if (stop) return;
+        const { items, runs } = buildReplay(h);
+        const info: ReplayInfo = { from: items[0]?.at ?? 0, to: items[items.length - 1]?.at ?? 0, speed: replay.speed, done: false, runs };
+        setRp(info);
+        setStatus("live");
+        setLoaded(true);
+        let cur: State = { ...EMPTY };
+        let i = 0;
+        const step = () => {
+          if (stop) return;
+          const it = items[i++];
+          if (!it) {
+            setRp({ ...info, done: true });
+            return;
+          }
+          if (it.coll === "objectives") cur = { ...EMPTY, harness_config: cur.harness_config, objective: it.doc };
+          else cur = reduce(cur, { coll: it.coll, op: "insert", id: String(it.doc._id), doc: it.doc });
+          setS(cur);
+          setLastEventAt(Date.now());
+          const next = items[i];
+          const gap = next ? Math.min(2500, Math.max(60, (next.at - it.at) / replay.speed)) : 0;
+          timer = setTimeout(step, gap);
+        };
+        step();
+      })().catch(() => setStatus("error"));
+      return () => {
+        stop = true;
+        if (timer) clearTimeout(timer);
+      };
+    }
     if (fx) {
       const { snapshot, steps } = fixture(Date.now());
       setS({ ...EMPTY, ...(snapshot as Partial<State>) });
@@ -197,8 +296,8 @@ function useStream(objective: string | null, fx: boolean, ready: boolean) {
     es.addEventListener("ping", () => setStatus("live"));
     es.addEventListener("error", () => setStatus("error"));
     return () => es.close();
-  }, [objective, fx, ready]);
-  return { s, status, loaded, lastEventAt, fxAlive };
+  }, [objective, fx, ready, replay?.speed, replay?.hours]);
+  return { s, status, loaded, lastEventAt, fxAlive, rp };
 }
 
 function useNow(ms = 500) {
@@ -274,14 +373,17 @@ function Banner({ m, crash }: { m: Moment | null; crash: { secs: number; seq: nu
   );
 }
 
-function Route({ s, primary, target, present }: { s: State; primary?: string; target: number; present: boolean }) {
+function Route({ s, primary, target, unit, down }: { s: State; primary?: string; target: number; unit?: string; down: boolean }) {
   const cps = s.checkpoints;
   const W = 920;
   const H = 215;
   const padL = 44, padR = 24, top = 52, bottom = 36;
   const vals = cps.map((c) => bearingOf(c, primary).current).filter((x): x is number => x !== null);
-  const yMin = Math.max(0, Math.min(target, ...vals) - 2);
-  const y = (v: number) => top + (1 - (v - yMin) / Math.max(1, target - yMin)) * (H - top - bottom);
+  // Goal is always drawn at the top; the far end is the worst value seen (with 10% headroom).
+  const worst = down ? Math.max(target, ...vals) : Math.min(target, ...vals);
+  const span = Math.abs(target - worst) || Math.abs(target) || 1;
+  const yMin = down ? worst + span * 0.1 : worst >= 0 ? Math.max(0, worst - span * 0.1) : worst - span * 0.1;
+  const y = (v: number) => Math.max(top - 14, top + ((target - v) / (target - yMin || 1)) * (H - top - bottom));
   const n = Math.max(cps.length, 6);
   const x = (i: number) => padL + (i + 0.5) * ((W - padL - padR) / n);
   const pts = cps.map((c, i) => ({ c, i, v: bearingOf(c, primary).current ?? yMin, ver: versionAt(s.harness_config, t(c.created_at)) }));
@@ -298,18 +400,18 @@ function Route({ s, primary, target, present }: { s: State; primary?: string; ta
       <line x1={padL - 10} x2={W - padR} y1={y(target)} y2={y(target)} className="goal" />
       <g transform={`translate(${W - padR - 6}, ${y(target) - 12})`}>
         <text textAnchor="end" className="goaltxt">
-          ◎ END STATE {target}/{target} · IMMUTABLE 🔒
+          ◎ END STATE {pretty(primary)} {down ? "≤" : "≥"} {fmtB(target, unit)} · IMMUTABLE 🔒
         </text>
       </g>
-      <text x={padL - 14} y={y(target) + 6} textAnchor="end" className="axis">{target}</text>
-      <text x={padL - 14} y={y(yMin) + 6} textAnchor="end" className="axis">{yMin}</text>
+      <text x={padL - 14} y={y(target) + 6} textAnchor="end" className="axis">{fmtB(target, unit)}</text>
+      <text x={padL - 14} y={y(yMin) + 6} textAnchor="end" className="axis">{fmtB(Number.isInteger(target) ? Math.round(yMin) : yMin, unit)}</text>
       {/* settings bends */}
-      {bends.map(({ i, c }) => {
+      {bends.map(({ i, c }, k) => {
         const bx = i < pts.length ? x(i) - (W - padL - padR) / n / 2 : x(Math.max(0, pts.length - 1)) + 20;
         return (
           <g key={c._id}>
             <line x1={bx} x2={bx} y1={top - 8} y2={H - bottom + 6} stroke={vcol(c.version)} className="bend" />
-            <text x={bx > W * 0.6 ? bx - 6 : bx + 6} y={H - 10} textAnchor={bx > W * 0.6 ? "end" : "start"} className="bendtxt" fill={vcol(c.version)}>
+            <text x={bx > W * 0.6 ? bx - 6 : bx + 6} y={k % 2 ? H - 30 : H - 10} textAnchor={bx > W * 0.6 ? "end" : "start"} className="bendtxt" fill={vcol(c.version)}>
               v{c.version} {diffLabel(c)}
             </text>
           </g>
@@ -319,7 +421,7 @@ function Route({ s, primary, target, present }: { s: State; primary?: string; ta
       {pts.slice(1).map((p, k) => {
         const a = pts[k];
         const gap = resumedAfter.has(a.c.seq);
-        const dip = p.v < a.v;
+        const dip = worse(a.v, p.v, down);
         return (
           <g key={p.c._id}>
             <line x1={x(a.i)} y1={y(a.v)} x2={x(p.i)} y2={y(p.v)} className={gap ? "seg gap" : dip ? "seg dip" : "seg"} stroke={dip ? "#fb7185" : vcol(p.ver)} />
@@ -333,7 +435,7 @@ function Route({ s, primary, target, present }: { s: State; primary?: string; ta
       })}
       {pts.map((p) => (
         <g key={p.c._id}>
-          <circle cx={x(p.i)} cy={y(p.v)} r={present ? 11 : 9} fill={vcol(p.ver)} className="node" />
+          <circle cx={x(p.i)} cy={y(p.v)} r={10} fill={vcol(p.ver)} className="node" />
           <text x={x(p.i)} y={y(p.v) + 28} textAnchor="middle" className="nodetxt">#{p.c.seq}</text>
         </g>
       ))}
@@ -395,27 +497,109 @@ function ConfigCard({ c, s, primary, present }: { c: Doc; s: State; primary?: st
   );
 }
 
+function RubricCard({ r, parent }: { r: Doc; parent?: Doc }) {
+  const [raw, setRaw] = useState(false);
+  const auc = r.metrics?.holdout?.auc;
+  const pauc = parent?.metrics?.holdout?.auc;
+  const delta = typeof auc === "number" && typeof pauc === "number" ? auc - pauc : null;
+  const flags: string[] = r.flags ?? [];
+  const over = flags.some((x) => /overfit/.test(x));
+  const invalid = flags.some((x) => /invalid/.test(x));
+  const lines = String(r.change_summary ?? "").split(/;\s*|,\s*(?=[+\-−~])/).map((x) => x.trim()).filter(Boolean);
+  return (
+    <div className={`card rub ${over || invalid ? "flagged" : ""}`}>
+      <div className="row between">
+        <span className="cardtitle rubtitle">rubric v{r.version}</span>
+        <span className="row">
+          {over && <span className="chip st-rolled_back">OVERFIT · gap {num(r.gap)}</span>}
+          {invalid && <span className="chip st-rolled_back">INVALID</span>}
+          <button className="rawbtn" onClick={() => setRaw(!raw)}>{raw ? "hide" : "raw document"}</button>
+        </span>
+      </div>
+      {raw ? (
+        <pre className="raw">{JSON.stringify(r, null, 2)}</pre>
+      ) : (
+        <>
+          <div className="metricline">
+            holdout AUC <b>{num(auc, 3)}</b>
+            {delta !== null && <span className={delta >= 0 ? "ok" : "fail"}> ({delta >= 0 ? "+" : ""}{delta.toFixed(3)})</span>}
+            {typeof r.metrics?.holdout?.a_win_rate === "number" && <> · A win {fmtB(r.metrics.holdout.a_win_rate <= 1 ? r.metrics.holdout.a_win_rate * 100 : r.metrics.holdout.a_win_rate, "%")}</>}
+            {!over && typeof r.gap === "number" && <> · gap {num(r.gap)}</>}
+          </div>
+          <div className="code">
+            {lines.length ? lines.slice(0, 3).map((l, k) => <div key={k} className={/^[-−]/.test(l) ? "del" : /^\+/.test(l) ? "add" : "chg"}>{l}</div>) : <div className="ctx">  baseline ({(r.rules ?? []).length} rules)</div>}
+          </div>
+          {r.rationale && <div className="reason">{one(r.rationale)}</div>}
+        </>
+      )}
+    </div>
+  );
+}
+
+function ReplaySummary({ rp }: { rp: ReplayInfo }) {
+  return (
+    <div className="summary">
+      <h2>across runs · real Atlas history {hhmm(rp.from)}–{hhmm(rp.to)}</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>run</th>
+            <th>settings</th>
+            <th>bearing start → end</th>
+            <th>cp</th>
+            <th>failures by class</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rp.runs.map((r) => (
+            <tr key={r.id}>
+              <td>{hhmm(r.at)}</td>
+              <td>
+                v{r.startVersion ?? "?"}
+                {r.endVersion !== r.startVersion ? ` → v${r.endVersion}` : ""}
+              </td>
+              <td>
+                {fmtB(r.first, r.unit)} → {fmtB(r.last, r.unit)}
+              </td>
+              <td>{r.cps}</td>
+              <td className="fl">
+                {Object.entries(r.failures)
+                  .map(([k, v]) => `${k} ×${v}`)
+                  .join(" · ") || "none"}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 // ---------- page ----------
 export default function Page() {
   const params = useParams();
   const [ready, setReady] = useState(false);
   useEffect(() => setReady(true), []);
-  const { s, status, loaded, lastEventAt, fxAlive } = useStream(params.objective, params.fixture, ready);
-  const liveAlive = useAlive(ready && !params.fixture);
+  const replayOpts = useMemo(() => (params.replay ? { speed: params.speed, hours: params.hours } : undefined), [params.replay, params.speed, params.hours]);
+  const { s, status, loaded, lastEventAt, fxAlive, rp } = useStream(params.objective, params.fixture, ready, replayOpts);
+  const liveAlive = useAlive(ready && !params.fixture && !params.replay);
   const alive = params.fixture ? fxAlive : liveAlive;
   const now = useNow();
   const present = params.present;
   const o = s.objective;
   const endState = o?.end_state as Doc | undefined;
   const primary: string | undefined = endState?.bearing ?? o?.bearings?.[0]?.name;
-  const target: number = endState?.target ?? o?.bearings?.[0]?.target ?? 10;
+  const pb: Doc | undefined = ((o?.bearings ?? []) as Doc[]).find((b) => b.name === primary) ?? o?.bearings?.[0];
+  const target: number = endState?.target ?? pb?.target ?? 10;
+  const unit: string | undefined = pb?.unit ?? endState?.unit;
+  const down = lowerBetter(endState?.direction ?? pb?.direction);
   const cfg = currentConfig(s.harness_config);
   const lastCp = s.checkpoints[s.checkpoints.length - 1];
   const latestTap = s.taps[s.taps.length - 1];
   const threshold: number = typeof cfg?.settings?.sentinel_threshold === "number" ? cfg.settings.sentinel_threshold : 0.6;
 
   // ---- banner queue: only moments that arrive after the first snapshot ----
-  const all = useMemo(() => moments(s, primary), [s, primary]);
+  const all = useMemo(() => moments(s, primary, unit, down), [s, primary, unit, down]);
   const seen = useRef<Set<string> | null>(null);
   const objKey = useRef<string | null>(null);
   const [queue, setQueue] = useState<{ m: Moment; start: number | null }[]>([]);
@@ -430,7 +614,11 @@ export default function Page() {
     const fresh = all.filter((m) => !seen.current!.has(m.key));
     if (!fresh.length) return;
     fresh.forEach((m) => seen.current!.add(m.key));
-    setQueue((q) => [...q, ...fresh.map((m) => ({ m, start: null }))]);
+    // Never let banners lag reality: keep at most the showing one plus the 2 newest.
+    setQueue((q) => {
+      const next = [...q, ...fresh.map((m) => ({ m, start: null as number | null }))];
+      return next.length > 3 ? [next[0], ...next.slice(-2)] : next;
+    });
   }, [all, loaded, o?._id]);
   useEffect(() => {
     if (!queue.length) return;
@@ -454,14 +642,14 @@ export default function Page() {
   let crashed = false;
   if (o && o.status !== "completed") {
     if (alive === false && everAlive.current) crashed = true;
-    else if (alive === null && !params.fixture && now - lastWrite > 6000 && now - lastWrite < 120000 && lastCp && bearingOf(lastCp, primary).current !== target) crashed = true;
+    else if (alive === null && !params.fixture && now - lastWrite > 6000 && now - lastWrite < 120000 && lastCp && !reached(bearingOf(lastCp, primary).current, target, down)) crashed = true;
   }
   if (crashed && downSince.current === null) downSince.current = alive === false ? now : lastWrite;
   if (!crashed) downSince.current = null;
   // After 60s down it's probably a deliberate stop, not the demo's kill: fall back to the idle banner (header badge still says down).
   if (crashed && downSince.current !== null && now - downSince.current > 60000) crashed = false;
   const crash = crashed ? { secs: Math.max(0, Math.round((now - (downSince.current ?? now)) / 1000)), seq: lastCp?.seq ?? null } : null;
-  const banner = queue[0]?.start != null ? queue[0].m : null;
+  const banner = queue[0]?.start != null && !rp?.done ? queue[0].m : null;
 
   // ---- hero metrics ----
   const hero = useMemo(() => {
@@ -471,12 +659,14 @@ export default function Page() {
     const beforeV = cur?.parent_version ?? (afterV !== null && afterV > 1 ? afterV - 1 : null);
     const skipsBy = new Map<number, number>();
     const regBy = new Map<number, number>();
+    const overBy = new Map<number, number>();
     const cpsBy = new Map<number, number>();
     for (const f of s.failures) {
       const v = failureVersion(cfgs, f);
       if (v === null) continue;
-      if (f.class === "skipped_checkpoint" || f.class === "corrupt_write") skipsBy.set(v, (skipsBy.get(v) ?? 0) + 1);
-      if (f.class === "regression") regBy.set(v, (regBy.get(v) ?? 0) + 1);
+      if (fclass(f) === "skipped_checkpoint" || fclass(f) === "corrupt_write") skipsBy.set(v, (skipsBy.get(v) ?? 0) + 1);
+      if (fclass(f) === "regression") regBy.set(v, (regBy.get(v) ?? 0) + 1);
+      if (fclass(f) === "overfit_segment") overBy.set(v, (overBy.get(v) ?? 0) + 1);
     }
     for (const c of s.checkpoints) {
       const v = versionAt(cfgs, t(c.created_at));
@@ -484,13 +674,13 @@ export default function Page() {
     }
     const vals = s.checkpoints.map((c) => bearingOf(c, primary).current).filter((x): x is number => x !== null);
     let low: number | null = null;
-    for (let i = 1; i < vals.length; i++) if (vals[i] < vals[i - 1]) low = vals[i];
+    for (let i = 1; i < vals.length; i++) if (worse(vals[i - 1], vals[i], down)) low = vals[i];
     const nowTests = vals.length ? vals[vals.length - 1] : (o?.bearings?.[0]?.current ?? null);
     const verdictCfg = [...cfgs].reverse().find((c) => c.outcome?.why);
-    return { beforeV, afterV, skipsBy, regBy, cpsBy, low, first: vals[0] ?? null, nowTests, why: verdictCfg ? `v${verdictCfg.version} ${verdictCfg.outcome.verdict === "kept" ? "kept" : "rolled back"}: ${one(verdictCfg.outcome.why)}` : null };
+    return { beforeV, afterV, skipsBy, regBy, overBy, cpsBy, low, first: vals[0] ?? null, nowTests, why: verdictCfg ? `v${verdictCfg.version} ${verdictCfg.outcome.verdict === "kept" ? "kept" : "rolled back"}: ${one(verdictCfg.outcome.why)}` : null };
   }, [s, primary, o]);
 
-  const lines = useMemo(() => narrate(s, present, primary), [s, present, primary]);
+  const lines = useMemo(() => narrate(s, present, primary, unit), [s, present, primary, unit]);
   const age = lastEventAt ? Math.max(0, Math.round((now - lastEventAt) / 1000)) : null;
   const counts: [string, number][] = [
     ["checkpoints", s.checkpoints.length],
@@ -500,9 +690,9 @@ export default function Page() {
     ["events", s.events.length],
     ["resumes", s.resumes.length],
   ];
-  const cfgCards = [...s.harness_config].reverse().slice(0, present ? 3 : 20);
+  const cfgCards = [...s.harness_config].reverse().slice(0, present ? 2 : 20);
 
-  const testsFrom = hero.low ?? hero.first;
+  const testsFrom = hero.first;
   const cmp = (label: string, by: Map<number, number>) => {
     const { beforeV, afterV } = hero;
     if (afterV === null) return null;
@@ -510,7 +700,7 @@ export default function Page() {
     const after = by.get(afterV) ?? 0;
     if (!before && !after) return null;
     return (
-      <div className="tile">
+      <div className="tile" key={label}>
         <div className="tlabel">{label}</div>
         <div className="tnum">
           {before !== null && (
@@ -528,15 +718,23 @@ export default function Page() {
     );
   };
 
+  const cmpTiles = [cmp("overfit proposals", hero.overBy), cmp("skipped checkpoints", hero.skipsBy), cmp("regressions", hero.regBy)].filter((x) => x !== null).slice(0, 2);
+
   return (
     <main className={present ? "present" : ""}>
       <header>
         <div className="row between top">
           <span className="brand">WAYPOINTS · flight recorder{params.fixture ? " · DEMO FIXTURE (not live)" : ""}</span>
+          {rp ? (
+            <span className="replaybar">
+              ⏵ REPLAY · {hhmm(rp.from)}–{hhmm(rp.to)} · {rp.speed}×{rp.done ? " · done" : ""}
+            </span>
+          ) : (
           <span className={`conn ${status}`}>
             {status === "live" ? "●" : "○"} {status === "live" ? "live · Atlas change stream" : status === "connecting" ? "connecting…" : "reconnecting…"}
             {age !== null && status === "live" ? <span className="age"> · last event {age}s ago</span> : null}
           </span>
+          )}
         </div>
         {!loaded ? (
           <h1 className="dimtxt">connecting to Atlas…</h1>
@@ -574,7 +772,7 @@ export default function Page() {
               <div className="banner b-idle">
                 <div className="bmain">
                   <div className="btitle">
-                    {lastCp ? `checkpoint #${lastCp.seq} · ${bearingOf(lastCp, primary).current ?? "?"}/${target} tests` : "waiting for the first checkpoint"}
+                    {lastCp ? `checkpoint #${lastCp.seq} · ${pretty(primary)} ${fmtB(bearingOf(lastCp, primary).current, unit)}` : "waiting for the first checkpoint"}
                   </div>
                   <div className="bsub">{lastCp ? `next: ${one(lastCp.next_action)}` : ""}</div>
                 </div>
@@ -582,24 +780,26 @@ export default function Page() {
             )}
           </div>
 
+          {rp?.done && <ReplaySummary rp={rp} />}
+
           <section className="hero">
             <div className="tile">
-              <div className="tlabel">tests passing</div>
+              <div className="tlabel">{pretty(primary)}</div>
               <div className="tnum">
                 {testsFrom !== null && testsFrom !== hero.nowTests && (
                   <>
-                    <span className="bad">{testsFrom}</span>
+                    <span className="bad">{fmtB(testsFrom, unit)}</span>
                     <span className="arrow">→</span>
                   </>
                 )}
-                <span className={hero.nowTests === target ? "good" : "neutral"}>{hero.nowTests ?? "?"}</span>
-                <span className="of">/{target}</span>
+                <span className={reached(hero.nowTests, target, down) ? "good" : "neutral"}>{fmtB(hero.nowTests, unit)}</span>
               </div>
-              <div className="tfoot">{hero.low !== null ? "from the regression low" : "since the first checkpoint"}</div>
+              <div className="tfoot">
+                start → now · target {down ? "≤" : "≥"} {fmtB(target, unit)}
+              </div>
             </div>
-            {cmp("skipped checkpoints", hero.skipsBy)}
-            {cmp("regressions", hero.regBy)}
-            {!(hero.skipsBy.size && hero.regBy.size) && (
+            {cmpTiles}
+            {cmpTiles.length < 2 && (
               <div className="tile">
                 <div className="tlabel">sentinel risk</div>
                 <div className="tnum">
@@ -617,18 +817,35 @@ export default function Page() {
               <h2>route vs destination</h2>
               <span className="tagline">change the route, never the destination</span>
             </div>
-            <Route s={s} primary={primary} target={target} present={present} />
+            <Route s={s} primary={primary} target={target} unit={unit} down={down} />
           </section>
 
-          <section>
-            <h2>settings versions · every change is one field, gated, on probation</h2>
-            <div className="cards">
-              {cfgCards.map((c) => (
-                <ConfigCard key={c._id} c={c} s={s} primary={primary} present={present} />
-              ))}
-              {cfgCards.length === 0 && <div className="dimtxt">no harness_config yet</div>}
-            </div>
-          </section>
+          {s.rubrics.length > 0 ? (
+            <section className="twocol">
+              <div>
+                <h2 className="h-work">what it's learning · rubric (the work)</h2>
+                {[...s.rubrics].reverse().slice(0, present ? 2 : 20).map((r) => (
+                  <RubricCard key={r._id} r={r} parent={s.rubrics.find((x) => x.version === r.parent_version) ?? s.rubrics.find((x) => x.version === r.version - 1)} />
+                ))}
+              </div>
+              <div>
+                <h2 className="h-self">how it's learning · harness settings (itself)</h2>
+                {cfgCards.slice(0, present ? 2 : 20).map((c) => (
+                  <ConfigCard key={c._id} c={c} s={s} primary={primary} present={present} />
+                ))}
+              </div>
+            </section>
+          ) : (
+            <section>
+              <h2 className="h-self">how it's learning · harness settings (itself) · one field per change, gated, on probation</h2>
+              <div className="cards">
+                {cfgCards.map((c) => (
+                  <ConfigCard key={c._id} c={c} s={s} primary={primary} present={present} />
+                ))}
+                {cfgCards.length === 0 && <div className="dimtxt">no harness_config yet</div>}
+              </div>
+            </section>
+          )}
 
           <section className="feed">
             <h2>what happened</h2>

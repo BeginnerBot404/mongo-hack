@@ -6,17 +6,18 @@ import { waypointsDb } from "@/lib/mongo";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const PER_OBJECTIVE = ["checkpoints", "decisions", "failures", "resumes", "policies", "taps", "events"] as const;
-const WATCHED = ["objectives", "harness_config", ...PER_OBJECTIVE];
+const PER_OBJECTIVE = ["checkpoints", "decisions", "failures", "resumes", "policies", "taps", "events", "rubrics"] as const;
+const GLOBAL = ["harness_config"] as const;
+const WATCHED = ["objectives", ...GLOBAL, ...PER_OBJECTIVE];
 const NO_EMBED = { projection: { embedding: 0 } };
 
 async function snapshot(pinned?: ObjectId | null) {
   const db = waypointsDb();
   const objective = pinned
     ? await db.collection("objectives").findOne({ _id: pinned })
-    : await db.collection("objectives").findOne({}, { sort: { updated_at: -1 } });
-  const harness_config = await db.collection("harness_config").find({}, NO_EMBED).sort({ version: 1 }).limit(100).toArray();
-  const out: Record<string, unknown> = { objective, harness_config, at: new Date() };
+    : await db.collection("objectives").findOne({}, { sort: { created_at: -1 } });
+  const out: Record<string, unknown> = { objective, at: new Date() };
+  for (const g of GLOBAL) out[g] = await db.collection(g).find({}, NO_EMBED).sort({ version: 1 }).limit(100).toArray();
   if (!objective) {
     for (const c of PER_OBJECTIVE) out[c] = [];
     return out;
@@ -104,7 +105,7 @@ export async function GET(request: Request) {
             if (doc && id !== currentId) {
               if (pinned) return;
               const upd = new Date((doc.updated_at as Date | undefined) ?? 0);
-              if (!currentId || ch.operationType === "insert" || upd >= currentUpdated) {
+              if (!currentId || ch.operationType === "insert") {
                 snap = await snapshot(doc._id as ObjectId);
                 currentId = id;
                 currentUpdated = upd;

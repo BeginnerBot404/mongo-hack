@@ -31,7 +31,7 @@ h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.12em; color: 
 .bmain { min-width: 0; }
 .btitle { font-size: 40px; font-weight: 900; letter-spacing: 0.02em; line-height: 1.05; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .bsub { font-size: 19px; font-weight: 600; margin-top: 4px; opacity: 0.95; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.b-crashed { background: #b91c1c; animation: pop 0.35s ease-out, pulse 1s ease-in-out infinite alternate; }
+.b-crashed { background: #b91c1c;  }
 .b-resumed { background: #1d4ed8; }
 .b-regression { background: #c2410c; }
 .b-tap { background: #86198f; }
@@ -103,7 +103,7 @@ h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.12em; color: 
 .line.res { color: var(--accent); } .line.pol { color: var(--pol); } .line.tap { color: #f0abfc; }
 .line.cfg, .line.ev-settings_reload { color: var(--warn); } .line.ev-probation_verdict { color: var(--ok); }
 .line.cp { color: var(--fg); } .line.dec, .line.dim { color: var(--soft); }
-.flash { animation: flash 2.5s ease-out; }
+.flash { }
 @keyframes flash { from { background: #3a3000; } to { background: transparent; } }
 
 /* ---- proof strip ---- */
@@ -119,3 +119,22 @@ h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.12em; color: 
 @media (min-width: 1300px) {
   main { max-width: 1500px; }
 }
+
+/* ---- work (rubric) vs self (settings) ---- */
+.twocol { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.twocol .card { margin-bottom: 8px; }
+.h-work { color: #93c5fd; }
+.h-self { color: var(--warn); }
+.card.rub { border-left-color: #93c5fd; }
+.card.rub.flagged { border-left-color: var(--fail); border-color: #7f1d1d; }
+.rubtitle { color: #93c5fd; }
+.metricline { font-size: 17px; font-weight: 700; margin-top: 4px; }
+.metricline b { font-family: var(--mono); font-size: 20px; }
+.code .chg { color: var(--warn); padding: 0 6px; }
+.replaybar { background: #312e81; color: #fff; font-weight: 900; padding: 4px 12px; border-radius: 6px; font-size: 16px; letter-spacing: 0.04em; }
+.summary { background: var(--panel); border: 2px solid #6366f1; border-radius: 10px; padding: 10px 14px; margin: 8px 0; }
+.summary table { width: 100%; border-collapse: collapse; font-size: 16px; }
+.summary th { text-align: left; color: var(--soft); font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; padding: 2px 6px; }
+.summary td { padding: 3px 6px; border-top: 1px solid var(--line); font-weight: 700; white-space: nowrap; }
+.summary td.fl { white-space: normal; font-weight: 600; color: var(--soft); }
+@media (max-width: 800px) { .twocol { grid-template-columns: 1fr; } }
