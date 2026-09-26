@@ -22,8 +22,12 @@ import { getFragments, SEED_SETTINGS, type Fragment } from "../src/fragments";
 const AGENT = "waypoints-harness";
 const REPO = resolve(import.meta.dir, "..");
 const FIXTURE = join(REPO, "demo", "fixture");
-const DEFAULT_MODEL = "z-ai/glm-5.3-flash";
+// Pinned after rehearsal: GLM skipped 2 of 6 post-test checkpoints (including the one after the regression) and
+// corrupted two full-file writes. A settings.model of GLM therefore runs Sonnet unless DEMO_MODEL asks for GLM.
+const GLM = "z-ai/glm-5.3-flash";
+const DEFAULT_MODEL = "anthropic/claude-sonnet-5";
 const FALLBACK_MODEL = "anthropic/claude-sonnet-5";
+const FALLBACK_FOR_SONNET = "openai/gpt-5.5";
 const TAP_WAIT_MS = Number(process.env.TAP_WAIT_MS ?? 15000);
 
 const OBJECTIVE = {
@@ -223,6 +227,7 @@ function chat(model: string, baseURL: string, apiKey: string) {
 function buildLlm(settingsModel: string | null, tools: StructuredToolInterface[]): { llm: Llm; label: string } {
   const orKey = process.env.OPENROUTER_API_KEY!;
   const OR = "https://openrouter.ai/api/v1";
+  const fallbackFor = (id: string) => (id === FALLBACK_MODEL ? FALLBACK_FOR_SONNET : FALLBACK_MODEL);
   const fallback = chat(FALLBACK_MODEL, OR, orKey).bindTools(tools);
   const gb10 = process.env.DEMO_PROVIDER === "gb10" || (!process.env.DEMO_MODEL && settingsModel === "gb10");
   if (gb10) {
@@ -230,10 +235,12 @@ function buildLlm(settingsModel: string | null, tools: StructuredToolInterface[]
     const primary = chat(m, process.env.GB10_BASE_URL || "http://localhost:8000/v1", process.env.GB10_API_KEY || "none").bindTools(tools);
     return { llm: primary.withFallbacks([fallback]) as unknown as Llm, label: `gb10:${m} → fallback ${FALLBACK_MODEL}` };
   }
-  const id = process.env.DEMO_MODEL || (settingsModel && settingsModel !== "gb10" ? settingsModel : DEFAULT_MODEL);
+  const pinned = !process.env.DEMO_MODEL && settingsModel === GLM;
+  const id = process.env.DEMO_MODEL || (settingsModel && settingsModel !== "gb10" && !pinned ? settingsModel : DEFAULT_MODEL);
+  const fb = fallbackFor(id);
   const primary = chat(id, OR, orKey).bindTools(tools);
-  if (id === FALLBACK_MODEL) return { llm: primary as unknown as Llm, label: id };
-  return { llm: primary.withFallbacks([fallback]) as unknown as Llm, label: `${id} → fallback ${FALLBACK_MODEL}` };
+  const llm = primary.withFallbacks([chat(fb, OR, orKey).bindTools(tools)]) as unknown as Llm;
+  return { llm, label: `${id} → fallback ${fb}${pinned ? ` (pinned; settings say ${GLM}, set DEMO_MODEL=${GLM} to use it)` : ""}` };
 }
 
 // ---------- main ----------
@@ -330,6 +337,10 @@ async function main() {
   async function handleServerSignals(j: any, objectiveId: string | null): Promise<string[]> {
     const notes: string[] = [];
     showEndState(j);
+    if (j?.auto_failure) {
+      const f = j.auto_failure;
+      log(red(bold(`  ✖ server auto-logged [regression]: ${f.bearing} ${f.from} → ${f.to} (failure …${String(f.failure_id).slice(-6)})`)));
+    }
     const tap = j?.tap;
     let reloadWanted = j?.settings?.reload === true;
     if (tap) {
@@ -343,6 +354,11 @@ async function main() {
         const r = await call("recall", { query: q, kind: "failure", objective_id: objectiveId });
         log(`  ${dim("↳")} ${resultSummary("recall", JSON.stringify(r))}`);
         notes.push(`Sentinel tap (risk ${tap.risk}) asked you to recall. Recall results: ${clip(JSON.stringify(r), 900)}`);
+      } else if (action === "adapt" && objectiveId) {
+        const pol = await call("list_policies", { objective_id: objectiveId });
+        const list = Array.isArray(pol) ? pol : pol.policies ?? [];
+        for (const line of policyLines({ policies: list.map((p: any) => ({ ...p, from_failure_id: p.from_failure_id ?? "?" })) })) log(line);
+        notes.push(`Sentinel tap (risk ${tap.risk}) adopted a policy. Active policies (hard rules): ${list.map((p: any) => `[${p.class}] ${p.rule}`).join(" | ")}`);
       } else if (action === "rollback" || action === "adjust_settings") reloadWanted = true;
       else notes.push(`Sentinel tap (risk ${tap.risk}): ${action}.`);
     }
@@ -370,7 +386,7 @@ async function main() {
         if (args.objective_id) objectiveId = args.objective_id;
         const bearing = (args.bearings_current ?? []).find((b: any) => b.name === "tests_passing")?.current;
         const dropped = typeof bearing === "number" && lastBearing != null && bearing < lastBearing;
-        if (dropped) log(red(bold(`  ▼ BEARING DROP tests_passing ${lastBearing} → ${bearing}: server logs a regression`)));
+        if (dropped) log(red(bold(`  ▼ BEARING DROP tests_passing ${lastBearing} → ${bearing}`)));
         if (typeof bearing === "number") lastBearing = bearing;
         const notes = await handleServerSignals(j, objectiveId);
         // A drop means the sentinel is likely scoring right now; wait briefly for its settings change so the
