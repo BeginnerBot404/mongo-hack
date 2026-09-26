@@ -8,7 +8,8 @@ export const dynamic = "force-dynamic";
 
 const PER_OBJECTIVE = ["checkpoints", "decisions", "failures", "resumes", "policies", "taps", "events", "rubrics", "drafts"] as const;
 const GLOBAL = ["harness_config"] as const;
-const WATCHED = ["objectives", "accounts", ...GLOBAL, ...PER_OBJECTIVE];
+// inflight: one row per harness worker, rewritten ≤ every 300 ms while the model streams (NOW WRITING strip)
+const WATCHED = ["objectives", "accounts", "inflight", ...GLOBAL, ...PER_OBJECTIVE];
 const NO_EMBED = { projection: { embedding: 0 } };
 
 /** ?series=1: every objective since the latest batch-1 objective (the harness's --continuous batches share one global playbook). */
@@ -34,6 +35,7 @@ async function snapshot(pinned?: ObjectId | null, dbName?: string | null, series
     : await db.collection("objectives").findOne({}, { sort: { created_at: -1 } });
   const out: Record<string, unknown> = { objective, at: new Date() };
   for (const g of GLOBAL) out[g] = await db.collection(g).find({}, NO_EMBED).sort({ version: 1 }).limit(100).toArray();
+  out.inflight = await db.collection("inflight").find({}).sort({ worker: 1 }).limit(32).toArray();
   // the queue in play (reserve accounts are loaded but not queued)
   out.accounts = await db
     .collection("accounts")

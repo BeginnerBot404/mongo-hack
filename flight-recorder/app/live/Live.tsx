@@ -8,7 +8,7 @@ import {
 } from "../Recorder";
 import { fragment } from "@/lib/fragments";
 
-type LiveState = State & { drafts: Doc[]; accounts: Doc[]; objectives: Doc[] };
+type LiveState = State & { drafts: Doc[]; accounts: Doc[]; objectives: Doc[]; inflight: Doc[] };
 type Raw = { k: number; at: number; coll: string; op: string; text: string };
 
 const ALL_CONTEXT = ["account_name", "account_summary", "account_record_full", "product_catalog"];
@@ -43,7 +43,7 @@ function trimRaw(v: unknown, key = ""): unknown {
 const compact = (v: unknown) => JSON.stringify(v).replace(/"([A-Za-z_][\w.]*)":/g, "$1:").replace(/,(?=[A-Za-z_"{[])/g, ", ");
 
 function useLive(objective: string | null, ready: boolean, series = true) {
-  const [s, setS] = useState<LiveState>({ ...EMPTY, drafts: [], accounts: [], objectives: [] });
+  const [s, setS] = useState<LiveState>({ ...EMPTY, drafts: [], accounts: [], objectives: [], inflight: [] });
   const [raw, setRaw] = useState<Raw[]>([]);
   const [status, setStatus] = useState<"connecting" | "live" | "error">("connecting");
   const [loaded, setLoaded] = useState(false);
@@ -54,12 +54,24 @@ function useLive(objective: string | null, ready: boolean, series = true) {
     es.addEventListener("snapshot", (e) => {
       const d = JSON.parse((e as MessageEvent).data);
       // never clear on a new batch: the series snapshot carries every batch since the run started
-      setS({ ...EMPTY, drafts: [], accounts: [], objectives: d.objective ? [d.objective] : [], ...d });
+      setS({ ...EMPTY, drafts: [], accounts: [], objectives: d.objective ? [d.objective] : [], inflight: [], ...d });
       setStatus("live");
       setLoaded(true);
     });
     es.addEventListener("change", (e) => {
       const ch = JSON.parse((e as MessageEvent).data) as Change;
+      if (ch.coll === "inflight") {
+        // token-rate rows: update in place, never into the raw stream list
+        setS((prev) => {
+          const list = prev.inflight ?? [];
+          if (ch.op === "delete") return { ...prev, inflight: list.filter((d) => d._id !== ch.id) };
+          if (!ch.doc) return prev;
+          const i = list.findIndex((d) => d._id === ch.doc!._id);
+          const next = i >= 0 ? list.map((d, j) => (j === i ? ch.doc! : d)) : [...list, ch.doc];
+          return { ...prev, inflight: next.sort((a, b) => String(a.worker).localeCompare(String(b.worker), undefined, { numeric: true })) };
+        });
+        return;
+      }
       setS((prev) => {
         const ids = new Set(prev.objectives.map((x) => x._id));
         const next: LiveState = { ...prev };
@@ -283,6 +295,35 @@ function RunControl({ alive }: { alive: boolean | null }) {
         <button className="btn start" disabled={busy || alive === null} onClick={() => go("start")}>▶ Start run</button>
       )}
     </span>
+  );
+}
+
+// ---------- NOW WRITING: one row per harness worker, streamed from `inflight` ----------
+const PHASE_LABEL: Record<string, string> = { thinking: "thinking", drafting: "drafting", tool: "tool", qa: "QA gate", idle: "idle" };
+function NowWriting({ rows, now }: { rows: Doc[]; now: number }) {
+  // rows from a stopped process age out after 2 min; idle rows stay (faded) so the strip does not jump
+  const live = rows.filter((r) => now - t(r.updated_at) < 120_000);
+  if (!live.length) return null;
+  return (
+    <section className="nowwriting">
+      <div className="nwhead"><b>Now writing</b><span>model output streamed token by token · one row per worker</span></div>
+      {live.map((r) => {
+        const idle = r.phase === "idle";
+        const secs = r.started_at ? Math.max(0, Math.round(((idle ? t(r.updated_at) : now) - t(r.started_at)) / 1000)) : null;
+        return (
+          <div key={r._id} className={`nwrow ph-${r.phase ?? "idle"}`}>
+            <div className="nwmeta">
+              <span className="nwworker">{r.worker}</span>
+              <span className="nwacct">{r.account ?? "—"}</span>
+              <span className={`nwphase ph-${r.phase ?? "idle"}`}>{PHASE_LABEL[r.phase] ?? r.phase}{r.tool && !idle ? ` · ${r.tool}` : ""}</span>
+              <span className="nwnums">{r.tokens ?? 0} tok{secs != null ? ` · ${secs}s` : ""}{r.settings_version != null ? ` · v${r.settings_version}` : ""}</span>
+            </div>
+            {r.reasoning && !idle ? <div className="nwreason">{String(r.reasoning).slice(-220)}</div> : null}
+            <div className="nwtext"><div>{idle ? <span className="nwidle">{r.text ? String(r.text).slice(-160) : "waiting for the next account"}</span> : <>{String(r.text ?? "").replace(/\n{2,}/g, "\n")}<i className="caret" /></>}</div></div>
+          </div>
+        );
+      })}
+    </section>
   );
 }
 
@@ -647,6 +688,7 @@ export default function Live({ objectiveId }: { objectiveId?: string } = {}) {
           {detail && o ? <RunHeader s={s} o={o} cls={cls} /> : <span className="psub">one row per email · real steps from Atlas · newest first · click a row to expand, {"{ }"} for the raw document</span>}
           <span className={`pill ${status === "live" ? "live" : "off"}`}>{status === "live" ? "● Atlas live" : status === "connecting" ? "○ connecting" : "○ reconnecting"}</span>
         </div>
+        {!detail && <NowWriting rows={s.inflight ?? []} now={now} />}
         <div className="wflist">
           {!loaded && <div className="empty">connecting to Atlas…</div>}
           {loaded && !o && <div className="empty">no objective yet — waiting for the harness to start…</div>}
