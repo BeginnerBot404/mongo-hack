@@ -13,14 +13,34 @@ export const JEV_MODEL = "typesafe/jev-router";
 
 type Action = "recall" | "rollback" | "adjust_settings" | "handoff" | "delegate" | "adapt";
 
-/** Deterministic failure class → prompt fragment the surgeon enables (classes are stored lowercase-kebab). */
+/** Deterministic failure class → prompt fragment the surgeon enables (classes are stored lowercase-kebab). Invoice task. */
 export const FIX_FOR: Record<string, string> = {
   regression: "verify_whole_suite",
   "skipped-checkpoint": "checkpoint_every_test",
   "corrupt-write": "one_change_per_edit",
 };
+/** Sales task (docs/SALES-PACK.md). */
+export const SALES_FIX_FOR: Record<string, string> = {
+  "overfit-segment": "min_support_15",
+  regression: "one_change_per_iteration",
+  "skipped-checkpoint": "checkpoint_every_eval",
+  "invalid-rubric": "check_schema_first",
+};
+export type TaskKind = "sales" | "invoice";
+/** objective.task when set, else inferred from the bearing names (holdout_auc / a_grade_win_rate → sales). */
+export function taskOf(objective: Document | null): TaskKind {
+  if (objective?.task === "sales" || objective?.task === "invoice") return objective.task;
+  const names = [objective?.end_state?.bearing, ...((objective?.bearings as Document[] | undefined) ?? []).map((b) => b?.name)];
+  return names.some((n) => n === "holdout_auc" || n === "a_grade_win_rate") ? "sales" : "invoice";
+}
+export function fixMapFor(objective: Document | null): Record<string, string> {
+  return taskOf(objective) === "sales" ? SALES_FIX_FOR : FIX_FOR;
+}
+/** Continuous bearings (AUC): a drop of at least this much is a regression; within FLAT_EPS for 3 checkpoints is a stall. */
+export const REGRESSION_EPS = 0.005;
+export const FLAT_EPS = 0.003;
 /** Harness-detected protocol violations always score full trend (the harness logs them from code, never the model). */
-const PROTOCOL_CLASSES = new Set(["skipped-checkpoint", "corrupt-write"]);
+const PROTOCOL_CLASSES = new Set(["skipped-checkpoint", "corrupt-write", "overfit-segment", "invalid-rubric"]);
 
 function say(line: string) {
   console.log(`[sentinel ${new Date().toISOString().slice(11, 19)}] ${line}`);
@@ -133,8 +153,9 @@ async function trendOf(objectiveId: ObjectId, failureClass?: string): Promise<{ 
   const last = await db.collection("checkpoints").find({ objective_id: objectiveId }).sort({ seq: -1 }).limit(3).toArray();
   const values = last.map((c) => bearingValue(c, name));
   const [latest, previous] = values;
-  if (latest != null && previous != null && latest < previous) return { score: 1, label: "regression" };
-  if (values.length === 3 && values.every((v) => v !== null && v === values[0])) return { score: 0.6, label: "stall" };
+  // Integer bearings (pass counts) behave as before; continuous ones (AUC) ignore noise below the epsilons.
+  if (latest != null && previous != null && previous - latest >= REGRESSION_EPS) return { score: 1, label: "regression" };
+  if (values.length === 3 && values.every((v) => v !== null && Math.abs(v - values[0]!) <= FLAT_EPS)) return { score: 0.6, label: "stall" };
   return { score: 0, label: "none" };
 }
 
@@ -323,7 +344,8 @@ export class Sentinel {
       let action: Action = "recall";
       let versionAfter: number | null = null;
       let detail = "";
-      const fragment = FIX_FOR[failure.class] ?? (trend.label === "regression" ? FIX_FOR.regression! : null);
+      const fixes = fixMapFor(await db.collection("objectives").findOne({ _id: objectiveId }));
+      const fragment = fixes[failure.class] ?? (trend.label === "regression" ? fixes.regression! : null);
       if (fragment && !config.settings.prompt_fragments.includes(fragment as never)) {
         if (config.status === "probation") {
           if (!this.queued) this.queued = { objectiveId, fragment, watch_class: failure.class, tapId, risk };

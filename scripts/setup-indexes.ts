@@ -3,6 +3,7 @@ import { MongoServerError } from "mongodb";
 import { mongo, waypointsDb as db } from "../src/clients";
 import { EMBED_DIMENSIONS, VECTOR_INDEX } from "../src/memory";
 import { HARNESS_CONFIG_SCHEMA, seedConfig } from "../src/settings";
+import { ensureSalesIndexes } from "../src/sales/tools";
 
 if (!process.env.MONGODB_URI) {
   console.error("MONGODB_URI is not set. Nothing to do.");
@@ -11,7 +12,7 @@ if (!process.env.MONGODB_URI) {
 
 type SearchIndexInfo = { name: string; status?: string; queryable?: boolean };
 
-const collections = ["objectives", "checkpoints", "decisions", "failures", "memories", "resumes", "policies", "events", "taps"];
+const collections = ["objectives", "checkpoints", "decisions", "failures", "memories", "resumes", "policies", "events", "taps", "opportunities", "rubrics"];
 const existing = new Set((await db.listCollections({}, { nameOnly: true }).toArray()).map((c) => c.name));
 for (const name of collections) {
   if (existing.has(name)) continue;
@@ -33,6 +34,7 @@ await db.collection("policies").createIndex({ objective_id: 1, class: 1, version
 await db.collection("events").createIndex({ objective_id: 1, created_at: -1 });
 await db.collection("events").createIndex({ created_at: -1 });
 await db.collection("taps").createIndex({ objective_id: 1, status: 1, created_at: -1 });
+await ensureSalesIndexes();
 console.log("regular indexes ok");
 
 // harness_config: $jsonSchema validator (collMod when the collection already exists), indexes, seed v1.

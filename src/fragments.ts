@@ -13,6 +13,11 @@ export const FRAGMENT_IDS = [
   "verify_whole_suite",
   "one_change_per_edit",
   "read_policies_first",
+  // sales task (docs/SALES-PACK.md)
+  "min_support_15",
+  "one_change_per_iteration",
+  "checkpoint_every_eval",
+  "check_schema_first",
 ] as const;
 export type FragmentId = (typeof FRAGMENT_IDS)[number];
 
@@ -43,6 +48,26 @@ export const FRAGMENTS: readonly Fragment[] = [
     id: "read_policies_first",
     title: "Restate policies first",
     text: "Before your first edit, restate the active policies from resume in one line each.",
+  },
+  {
+    id: "min_support_15",
+    title: "Only well-supported segments",
+    text: "Only add a rule for a value with at least 15 train deals; check segment_stats first.",
+  },
+  {
+    id: "one_change_per_iteration",
+    title: "One rule change per proposal",
+    text: "Change exactly one rule per proposal, so each change's effect is measurable.",
+  },
+  {
+    id: "checkpoint_every_eval",
+    title: "Checkpoint after every evaluation",
+    text: "Checkpoint immediately after every propose_rubric, before anything else.",
+  },
+  {
+    id: "check_schema_first",
+    title: "Check the schema first",
+    text: "Call describe_data before proposing; use only listed fields and values.",
   },
 ];
 
