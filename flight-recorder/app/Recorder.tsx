@@ -379,7 +379,7 @@ function useStream(objective: string | null, fx: boolean, ready: boolean, replay
     if (replay) {
       let stop = false;
       (async () => {
-        const h = await (await fetch(`/api/history?${dbQ()}hours=${replay.hours}${replay.since ? `&since=${encodeURIComponent(replay.since)}` : ""}`, { cache: "no-store" })).json();
+        const h = await (await fetch(`/api/history?${dbQ()}${new URLSearchParams(location.search).has("hours") ? `hours=${replay.hours}` : ""}${replay.since ? `&since=${encodeURIComponent(replay.since)}` : ""}`, { cache: "no-store" })).json();
         if (stop) return;
         setRdata(buildReplay(h));
         setStatus("live");

@@ -424,5 +424,12 @@ main.console.playbook { height: calc(100vh - 58px); overflow: auto; display: blo
 
 /* Scroll fixes (16:48): side column gets bottom room so the last panel scrolls fully into view;
    replay isn't locked to one viewport height and clears the fixed scrubber. */
-.side { padding-bottom: 96px; }
+.side { padding-bottom: 160px; scroll-padding-bottom: 160px; }
 main.console.replaying { height: auto; min-height: calc(100vh - 58px); overflow: visible; padding-bottom: 180px; }
+
+/* sentinel + surgeon rows in the NOW WRITING strip */
+.nwproc .nwacct { font-size: 15px; }
+.nwproc.ph-idle { opacity: 0.75; }
+.nwprocdet { font: 13px var(--mono); color: var(--soft); overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.wflist { padding-bottom: 120px; }
+main.console.playbook { padding-bottom: 140px; }

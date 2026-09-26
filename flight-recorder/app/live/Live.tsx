@@ -303,13 +303,66 @@ function RunControl({ alive }: { alive: boolean | null }) {
 
 // ---------- NOW WRITING: one row per harness worker, streamed from `inflight` ----------
 const PHASE_LABEL: Record<string, string> = { thinking: "thinking", drafting: "drafting", tool: "tool", qa: "QA gate", idle: "idle" };
-function NowWriting({ rows, now }: { rows: Doc[]; now: number }) {
+// the other two processes: the sentinel (newest `taps` doc) and the surgeon (the config version on probation)
+function ProcessRows({ s, now }: { s: LiveState; now: number }) {
+  const tap = s.taps[s.taps.length - 1];
+  const trig = tap ? s.failures.find((f) => f._id === tap.trigger?.id) : null;
+  const ackd = tap ? s.events.some((e) => e.kind === "tap_acknowledged" && e.detail?.tap_id === tap._id) : false;
+  const tapAge = tap ? now - t(tap.created_at) : Infinity;
+  const fresh = tapAge < 20_000;
+  const comps = tap?.components ? Object.entries(tap.components as Doc).map(([k, v]) => `${k.slice(0, 3)} ${Number(v).toFixed(2)}`).join(" · ") : "";
+  const action = tap?.decision?.tap ? `TAP → ${tap.axis ?? tap.decision?.action ?? "surgeon"}` : tap?.decision?.action ? `${tap.decision.action} (no tap)` : null;
+  const cfgs = s.harness_config;
+  const prob = [...cfgs].reverse().find((c) => c.status === "probation" && c.probation && !c.outcome);
+  const d = prob ? diffOf(prob, s) : null;
+  const lastDone = [...cfgs].reverse().find((c) => c.created_by === "surgeon" && c.outcome);
+  return (
+    <>
+      <div className={`nwrow nwproc ${fresh ? "ph-thinking" : "ph-idle"}`}>
+        <div className="nwmeta">
+          <span className="nwworker">sentinel</span>
+          {tap ? (
+            <>
+              <span className="nwacct">{trig?.class ?? tap.trigger?.kind ?? "check"}</span>
+              <span className={`nwphase ${tap.decision?.tap ? "ph-tool" : fresh ? "ph-thinking" : ""}`}>{fresh ? action ?? "scored" : "watching"}</span>
+              <span className="nwprocdet">risk {Number(tap.risk ?? 0).toFixed(2)}{comps ? ` = ${comps}` : ""}{!fresh && action ? ` · last: ${action}` : ""}{ackd ? " · harness ack'd" : ""}</span>
+              <span className="nwnums">{hhmmss(tap.created_at)}</span>
+            </>
+          ) : (
+            <span className="nwphase">watching · no decision yet</span>
+          )}
+        </div>
+      </div>
+      <div className={`nwrow nwproc ${d ? "ph-qa" : "ph-idle"}`}>
+        <div className="nwmeta">
+          <span className="nwworker">surgeon</span>
+          {prob && d ? (
+            <>
+              <span className="nwacct">v{prob.version} on probation</span>
+              <span className="nwphase ph-qa">{d.trial}</span>
+              <span className="nwprocdet">{d.axis}{d.because ? ` · because ${d.because}` : ""}{d.plus.length ? ` · +${d.plus.slice(0, 2).join(", ")}` : ""}{d.minus.length ? ` · −${d.minus.slice(0, 2).join(", ")}` : ""}</span>
+              <span className="nwnums">{hhmmss(prob.created_at)}</span>
+            </>
+          ) : (
+            <>
+              <span className="nwphase">idle</span>
+              <span className="nwprocdet">{lastDone ? `last: v${lastDone.version} ${lastDone.outcome.verdict === "kept" ? "kept" : "undone"} · ${diffOf(lastDone, s).axis}` : "no change on trial"}</span>
+              {lastDone ? <span className="nwnums">{hhmmss(lastDone.outcome.decided_at ?? lastDone.created_at)}</span> : null}
+            </>
+          )}
+        </div>
+      </div>
+    </>
+  );
+}
+
+function NowWriting({ rows, now, s }: { rows: Doc[]; now: number; s: LiveState }) {
   // rows from a stopped process age out after 2 min; idle rows stay (faded) so the strip does not jump
   const live = rows.filter((r) => now - t(r.updated_at) < 120_000);
-  if (!live.length) return null;
   return (
     <section className="nowwriting">
-      <div className="nwhead"><b>Now writing</b><span>model output streamed token by token · one row per worker</span></div>
+      <div className="nwhead"><b>Now writing</b><span>workers stream token by token · sentinel + surgeon decide live</span></div>
+      <ProcessRows s={s} now={now} />
       {live.map((r) => {
         const idle = r.phase === "idle";
         const secs = r.started_at ? Math.max(0, Math.round(((idle ? t(r.updated_at) : now) - t(r.started_at)) / 1000)) : null;
@@ -773,7 +826,7 @@ export default function Live({ objectiveId }: { objectiveId?: string } = {}) {
           {detail && o ? <RunHeader s={s} o={o} cls={cls} /> : <span className="psub">one row per email · real steps from Atlas · newest first · click a row to expand, {"{ }"} for the raw document</span>}
           <span className={`pill ${status === "live" ? "live" : "off"}`}>{status === "live" ? "● Atlas live" : status === "connecting" ? "○ connecting" : "○ reconnecting"}</span>
         </div>
-        {!detail && <NowWriting rows={s.inflight ?? []} now={now} />}
+        {!detail && <NowWriting rows={s.inflight ?? []} now={now} s={s} />}
         <div className="wflist">
           {!loaded && <div className="empty">connecting to Atlas…</div>}
           {loaded && !o && <div className="empty">no objective yet — waiting for the harness to start…</div>}
