@@ -22,12 +22,10 @@ import { getFragments, SEED_SETTINGS, type Fragment } from "../src/fragments";
 const AGENT = "waypoints-harness";
 const REPO = resolve(import.meta.dir, "..");
 const FIXTURE = join(REPO, "demo", "fixture");
-// Pinned after rehearsal: GLM skipped 2 of 6 post-test checkpoints (including the one after the regression) and
-// corrupted two full-file writes. A settings.model of GLM therefore runs Sonnet unless DEMO_MODEL asks for GLM.
+// GLM everywhere. Its skipped checkpoints and corrupt writes are caught by the harness in code, logged as failures
+// (skipped-checkpoint / corrupt-write), and the sentinel answers with a gated settings change.
 const GLM = "z-ai/glm-5.3-flash";
-const DEFAULT_MODEL = "anthropic/claude-sonnet-5";
-const FALLBACK_MODEL = "anthropic/claude-sonnet-5";
-const FALLBACK_FOR_SONNET = "openai/gpt-5.5";
+const DEFAULT_MODEL = GLM;
 const TAP_WAIT_MS = Number(process.env.TAP_WAIT_MS ?? 30000);
 
 const OBJECTIVE = {
@@ -116,10 +114,24 @@ const readFileTool = tool(async ({ path }) => await Bun.file(scoped(path)).text(
   schema: z.object({ path: z.string().describe("path relative to demo/fixture") }),
 });
 
+// Corrupt-write guard (deterministic): the new invoice.ts must parse and keep every export of the original.
+const TEMPLATE_EXPORTS = new Bun.Transpiler({ loader: "ts" }).scan(await Bun.file(join(REPO, "demo", "fixture-template", "invoice.ts")).text()).exports;
+export function corruption(content: string): string | null {
+  let exports: string[];
+  try { exports = new Bun.Transpiler({ loader: "ts" }).scan(content).exports; } catch (e: any) { return `does not parse: ${clip(String(e?.message ?? e), 120)}`; }
+  const missing = TEMPLATE_EXPORTS.filter((x) => !exports.includes(x));
+  return missing.length ? `drops export(s) ${missing.join(", ")}` : null;
+}
+let onCorruptWrite: (why: string) => Promise<void> = async () => {};
 const writeFileTool = tool(
   async ({ path, content }) => {
     const abs = scoped(path);
     if (relative(FIXTURE, abs) !== "invoice.ts") throw new Error("only invoice.ts is writable: fix bugs in invoice.ts");
+    const bad = corruption(content);
+    if (bad) {
+      await onCorruptWrite(bad);
+      return `write REJECTED by the harness (corrupt write: new invoice.ts ${bad}); invoice.ts is unchanged. Write the FULL file again.`;
+    }
     await mkdir(dirname(abs), { recursive: true });
     await Bun.write(abs, content);
     return `wrote ${relative(FIXTURE, abs)} (${content.length} bytes)`;
@@ -203,7 +215,7 @@ function textOf(r: unknown): string {
 const parse = (s: string): any => { try { return JSON.parse(s); } catch { return { error: s }; } };
 
 // ---------- settings (harness_config) ----------
-type Settings = { version: number; status: string; model: string | null; fragments: Fragment[]; ids: string[]; required: string[]; local: boolean };
+type Settings = { version: number; status: string; model: string | null; fragments: Fragment[]; ids: string[]; required: string[]; local: boolean; outcome?: { verdict: string; why: string } | null };
 
 const BASE_PROMPT = (task: string) =>
   `You are the "${AGENT}" coding agent. You work through tools only; be terse between tool calls.\n` +
@@ -227,21 +239,18 @@ function chat(model: string, baseURL: string, apiKey: string) {
 function buildLlm(settingsModel: string | null, tools: StructuredToolInterface[]): { llm: Llm; label: string } {
   const orKey = process.env.OPENROUTER_API_KEY!;
   const OR = "https://openrouter.ai/api/v1";
-  const fallbackFor = (id: string) => (id === FALLBACK_MODEL ? FALLBACK_FOR_SONNET : FALLBACK_MODEL);
-  const fallback = chat(FALLBACK_MODEL, OR, orKey).bindTools(tools);
   const gb10 = process.env.DEMO_PROVIDER === "gb10" || (!process.env.DEMO_MODEL && settingsModel === "gb10");
   if (gb10) {
+    // GB10 (local vLLM serving GLM) first; OpenRouter's GLM if it is unreachable.
     const m = process.env.GB10_MODEL || "gb10";
     const primary = chat(m, process.env.GB10_BASE_URL || "http://localhost:8000/v1", process.env.GB10_API_KEY || "none").bindTools(tools);
-    return { llm: primary.withFallbacks([fallback]) as unknown as Llm, label: `gb10:${m} → fallback ${FALLBACK_MODEL}` };
+    return { llm: primary.withFallbacks([chat(GLM, OR, orKey).bindTools(tools)]) as unknown as Llm, label: `gb10:${m} → fallback openrouter:${GLM}` };
   }
-  const pinned = !process.env.DEMO_MODEL && settingsModel === GLM;
-  const id = process.env.DEMO_MODEL || (settingsModel && settingsModel !== "gb10" && !pinned ? settingsModel : DEFAULT_MODEL);
-  const fb = fallbackFor(id);
-  const primary = chat(id, OR, orKey).bindTools(tools);
-  const llm = primary.withFallbacks([chat(fb, OR, orKey).bindTools(tools)]) as unknown as Llm;
-  return { llm, label: `${id} → fallback ${fb}${pinned ? ` (pinned over settings.model ${GLM})` : ""}` };
+  const id = process.env.DEMO_MODEL || (settingsModel && settingsModel !== "gb10" ? settingsModel : DEFAULT_MODEL);
+  return { llm: chat(id, OR, orKey).bindTools(tools) as unknown as Llm, label: `openrouter:${id}` };
 }
+/** Which endpoint served a turn, from the response's model name. */
+const endpointOf = (name: string) => (process.env.GB10_MODEL && name === process.env.GB10_MODEL ? `gb10:${name}` : `openrouter:${name}`);
 
 // ---------- main ----------
 async function main() {
@@ -290,7 +299,7 @@ async function main() {
     const j = await call("get_settings", {});
     if (j.error) throw new Error(`get_settings: ${j.error}`);
     const fragments: Fragment[] = j.fragments ?? [];
-    return { version: j.version, status: j.status, model: j.settings?.model ?? null, fragments, ids: j.settings?.prompt_fragments ?? fragments.map((f) => f.id), required: j.settings?.required_tools ?? [], local: false };
+    return { version: j.version, status: j.status, model: j.settings?.model ?? null, fragments, ids: j.settings?.prompt_fragments ?? fragments.map((f) => f.id), required: j.settings?.required_tools ?? [], local: false, outcome: j.outcome ?? null };
   }
 
   const task = await Bun.file(join(REPO, "demo", "task.md")).text();
@@ -315,15 +324,46 @@ async function main() {
     const prev = settings!;
     const next = await loadSettings();
     if (next.version === prev.version && next.status === prev.status) return null;
+    if (next.version === prev.version && next.outcome) {
+      const kept = next.outcome.verdict === "kept";
+      log((kept ? green : red)(bold(`  ${kept ? "✔" : "✖"} PROBATION v${next.version} → ${next.outcome.verdict.toUpperCase()}: ${next.outcome.why}`)) + dim(`  [${reason}]`));
+      log(dim(`    ${disciplineLine()}`));
+      applySettings(next);
+      return `Settings v${next.version} probation verdict: ${next.outcome.verdict} (${next.outcome.why}).`;
+    }
     const added = next.ids.filter((id) => !prev.ids.includes(id)).map((id) => `+${id}`);
     const removed = prev.ids.filter((id) => !next.ids.includes(id)).map((id) => `-${id}`);
     const diff = [...added, ...removed].join(" ") || (next.model !== prev.model ? `model ${prev.model} → ${next.model}` : "no fragment change");
     log(cyan(bold(`  ⟳ SETTINGS v${prev.version} → v${next.version} (${next.status}): ${diff}`)) + dim(`  [${reason}]`));
+    log(dim(`    ${disciplineLine()}`));
     applySettings(next);
     const newRules = next.fragments.filter((f) => added.includes(`+${f.id}`)).map((f) => `${f.title}: ${f.text}`);
     return `Harness settings reloaded v${prev.version} -> v${next.version} (${next.status}); ${diff}.` +
       (newRules.length ? ` New standing rule(s), now in your system prompt: ${newRules.join(" | ")}` : "");
   }
+
+  // Discipline per settings version (this process): test runs, skipped checkpoints, writes, corrupt writes.
+  const stats = new Map<number, { tests: number; skipped: number; writes: number; corrupt: number }>();
+  const stat = () => {
+    const v = settings?.version ?? 0;
+    if (!stats.has(v)) stats.set(v, { tests: 0, skipped: 0, writes: 0, corrupt: 0 });
+    return stats.get(v)!;
+  };
+  const disciplineLine = () =>
+    "discipline by settings version: " +
+    [...stats.entries()].map(([v, x]) => `v${v} ${x.skipped} skipped checkpoint(s)/${x.tests} test runs, ${x.corrupt} corrupt/${x.writes} writes`).join(" → ");
+  onCorruptWrite = async (why: string) => {
+    stat().corrupt++;
+    log(red(bold(`  ⛨ corrupt write rejected (${why}) → log_failure [corrupt_write]`)));
+    if (!objectiveId) return;
+    await call("log_failure", {
+      objective_id: objectiveId,
+      failure: `Model's full-file write of invoice.ts was corrupt: ${why}. The harness rejected it.`,
+      class: "corrupt_write",
+      context: `write_file under settings v${settings?.version}; test run ${testRuns}`,
+      agent: AGENT,
+    });
+  };
 
   let endStateShown = false;
   function showEndState(j: any) {
@@ -451,7 +491,15 @@ async function main() {
       if (checkpointOwed && next !== "checkpoint" && lastReport && settings?.required.includes("checkpoint")) {
         enforced++;
         const r = lastReport;
-        log(yellow(bold(`  ⛨ harness checkpoint (required_tools: checkpoint; model went to ${next ?? "stop"}) tests_passing=${r.pass}`)));
+        stat().skipped++;
+        log(yellow(bold(`  ⛨ harness checkpoint (required_tools: checkpoint; model went to ${next ?? "stop"}) tests_passing=${r.pass} → log_failure [skipped_checkpoint]`)));
+        await call("log_failure", {
+          objective_id: objectiveId,
+          failure: `Model skipped the checkpoint after test run ${testRuns} (${r.pass}/${r.total} passing) and went to ${next ?? "stop"}.`,
+          class: "skipped_checkpoint",
+          context: `test run ${testRuns} under settings v${settings?.version}; harness wrote the checkpoint (required_tools)`,
+          agent: AGENT,
+        });
         const raw = await doCheckpoint({
           objective_id: objectiveId,
           state_summary: `Harness auto-checkpoint after a test run: ${r.pass}/${r.total} passing (model skipped checkpoint).`,
@@ -481,7 +529,7 @@ async function main() {
         for (const msg of patch?.messages ?? []) {
           if (node === "agent" && msg instanceof AIMessage) {
             turn++;
-            log(dim(`  ◆ turn ${turn} · ${String(msg.response_metadata?.model_name ?? msg.response_metadata?.model ?? "?")}`));
+            log(dim(`  ◆ turn ${turn} · ${endpointOf(String(msg.response_metadata?.model_name ?? msg.response_metadata?.model ?? "?"))} · settings v${(settings as Settings | null)?.version}`));
             const text = typeof msg.content === "string" ? msg.content : msg.content.map((p: any) => p.text ?? "").join("");
             if (text.trim()) {
               const mem = text.match(/MEMORY:[^\n]*/);
@@ -502,7 +550,9 @@ async function main() {
             const raw = typeof msg.content === "string" ? msg.content : msg.content.map((p: any) => p.text ?? "").join("");
             const summary = msg.status === "error" ? red(clip(raw, 110)) : resultSummary(name, raw);
             log(`  ${dim("↳")} ${summary}`);
+            if (name === "write_file" && !/REJECTED/.test(raw)) stat().writes++;
             if (name === "run_tests") {
+              stat().tests++;
               testRuns++;
               awaitingCheckpoint = true;
               try { green_ = JSON.parse(raw).all_green === true; } catch {}
@@ -518,12 +568,38 @@ async function main() {
     }
   } catch (e: any) {
     if (e?.name === "GraphRecursionError") log(yellow(`\n■ stopped: hit --max-steps ${MAX_STEPS}`));
-    else throw e;
-  } finally {
-    await mcp.close().catch(() => {});
+    else {
+      await mcp.close().catch(() => {});
+      throw e;
+    }
   }
+  // Probation needs checkpoints under the new settings. If the task finished first, the harness verifies the suite
+  // (a real test run + checkpoint) until the sentinel rules, so the verdict lands on stage instead of next session.
+  for (let i = 0; green_ && settings && (settings as Settings).status === "probation" && i < 3; i++) {
+    const s0 = settings as Settings;
+    const r = await runTests();
+    stat().tests++;
+    log(`${blue("→ run_tests    ")} ${dim(`(harness verification, v${s0.version} on probation)`)}`);
+    log(`  ${dim("↳")} ${resultSummary("run_tests", JSON.stringify(r))}`);
+    const raw = await doCheckpoint({
+      objective_id: objectiveId,
+      state_summary: `Harness verification run while settings v${s0.version} is on probation: ${r.pass}/${r.total} passing.`,
+      open_threads: r.failures.map((f) => f.test),
+      next_action: r.all_green ? "Objective complete." : `Fix: ${r.failures[0]?.test}`,
+      bearings_current: [{ name: "tests_passing", current: r.pass }],
+      agent: AGENT,
+    });
+    log(`${magenta("→ checkpoint   ")} tests_passing=${r.pass}`);
+    log(`  ${dim("↳")} ${resultSummary("checkpoint", raw)}`);
+    for (let t = 0; t < 8 && (settings as Settings).status === "probation" && (settings as Settings).version === s0.version; t++) {
+      await Bun.sleep(1000);
+      await reload("probation");
+    }
+  }
+  await mcp.close().catch(() => {});
   if (awaitingCheckpoint) skipped++;
-  log(dim(`\n  checkpoint discipline: ${checkpointsAfterTests}/${testRuns} test runs followed by a model checkpoint${skipped ? `, ${skipped} skipped` : ""}${enforced ? `, ${enforced} enforced by the harness` : ""}`));
+  log(dim(`\n  ${disciplineLine()}`));
+  log(dim(`  checkpoint discipline: ${checkpointsAfterTests}/${testRuns} test runs followed by a model checkpoint${skipped ? `, ${skipped} skipped` : ""}${enforced ? `, ${enforced} enforced by the harness` : ""}`));
   log(green_ ? green(bold(`■ done: all tests green after ${toolCalls} tool calls`)) : yellow(`■ finished after ${toolCalls} tool calls (tests not all green)`));
   process.exit(green_ ? 0 : 1);
 }
