@@ -192,7 +192,7 @@ try {
   const v3 = await surgeon("apply_settings_change", {
     objective_id: oidB,
     field: "model",
-    value: "anthropic/claude-sonnet-5",
+    value: "openai/gpt-5.5",
     reason: { kind: "tap", id: null, summary: "smoke: manual probation for the rollback path" },
     watch_class: "regression",
     agent: "smoke",

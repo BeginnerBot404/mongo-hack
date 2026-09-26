@@ -10,17 +10,29 @@ export const EMBED_DIMENSIONS = 1024;
 
 export type MemoryKind = "checkpoint" | "decision" | "failure";
 
+// Fail fast: a rate-limited or slow Voyage must never stall an agent's tool call.
+const VOYAGE_REQUEST = { timeoutInSeconds: 4, maxRetries: 0 };
+let voyagePausedUntil = 0;
+function voyageAvailable(): boolean {
+  return Date.now() >= voyagePausedUntil;
+}
+function noteVoyageError(err: unknown) {
+  if (/429|rate/i.test(err instanceof Error ? err.message : String(err))) voyagePausedUntil = Date.now() + 60_000;
+}
+
 async function embed(text: string, inputType: "document" | "query"): Promise<number[] | null> {
   if (!process.env.VOYAGE_API_KEY) {
     log("VOYAGE_API_KEY not set; skipping embedding");
     return null;
   }
+  if (!voyageAvailable()) return null;
   try {
-    const res = await voyage.embed({ input: [text], model: EMBED_MODEL, inputType, outputDimension: EMBED_DIMENSIONS });
+    const res = await voyage.embed({ input: [text], model: EMBED_MODEL, inputType, outputDimension: EMBED_DIMENSIONS }, VOYAGE_REQUEST);
     const vector = res.data?.[0]?.embedding;
     if (!vector?.length) throw new Error("Voyage returned no embedding");
     return vector;
   } catch (err) {
+    noteVoyageError(err);
     log("embedding failed:", err instanceof Error ? err.message : String(err));
     return null;
   }
@@ -87,18 +99,20 @@ export async function recall(input: {
 
   try {
     if (!process.env.VOYAGE_API_KEY) throw new Error("VOYAGE_API_KEY not set");
+    if (!voyageAvailable()) throw new Error("Voyage paused after a rate limit");
     const reranked = await voyage.rerank({
       query: input.query,
       documents: candidates.map((c) => String(c.text ?? "")),
       model: RERANK_MODEL,
       topK: Math.min(input.limit, candidates.length),
-    });
+    }, VOYAGE_REQUEST);
     const results = (reranked.data ?? []).map((r) => ({
       ...candidates[r.index ?? 0],
       relevance_score: r.relevanceScore ?? null,
     }));
     return { query: input.query, method: `${method} + ${RERANK_MODEL} rerank`, results };
   } catch (err) {
+    noteVoyageError(err);
     log("rerank failed:", err instanceof Error ? err.message : String(err));
     return { query: input.query, method: `${method} (rerank unavailable)`, results: candidates.slice(0, input.limit) };
   }

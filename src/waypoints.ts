@@ -111,8 +111,11 @@ async function getObjective(id: ObjectId): Promise<Objective> {
   return found;
 }
 
+// Background roles (surgeon, sentinel) must not replace the working agent as `last_agent`, or resume reports the wrong previous agent.
+const BACKGROUND_AGENTS = new Set(["surgeon", "sentinel"]);
 async function touchObjective(id: ObjectId, agent: string, now: Date) {
-  await objectives().updateOne({ _id: id }, { $set: { last_agent: agent, updated_at: now } });
+  const set = BACKGROUND_AGENTS.has(agent) ? { updated_at: now } : { last_agent: agent, updated_at: now };
+  await objectives().updateOne({ _id: id }, { $set: set });
 }
 
 export function normalizeClass(raw: string): string {
