@@ -21,6 +21,8 @@ export const CURRENT_STATUSES: ConfigStatus[] = ["active", "probation", "kept"];
 export const PROBATION_CHECKPOINTS = 2;
 /** Outreach probation is longer: one checkpoint per submitted draft, so 3 drafts under the new settings. */
 export const OUTREACH_PROBATION_CHECKPOINTS = 3;
+/** Outreach verdicts need at least this many drafts written under the probation version (never "kept" on 0 evidence). */
+export const OUTREACH_PROBATION_DRAFTS = 3;
 /**
  * apply_settings_change field macro for the outreach guardrail axis: ONE version that adds the tool (value, e.g.
  * "precheck_email") to BOTH granted_tools and required_tools. Stored as change {field: "granted_tools", from, to,
@@ -402,14 +404,26 @@ export async function evaluateProbation(input: { objective_id: string; agent: st
   const p = current.probation;
   const objective = await db.collection("objectives").findOne({ _id: objectiveId });
   if (!objective) throw new Error(`No objective with id ${input.objective_id}`);
+  // Outreach: a verdict needs evidence written UNDER this version (drafts.settings_version === version).
+  if (isOutreach(objective)) {
+    const under = await db.collection("drafts").countDocuments({ settings_version: current.version });
+    if (under < OUTREACH_PROBATION_DRAFTS)
+      return {
+        evaluated: false,
+        verdict: "pending" as const,
+        why: `pending: ${under}/${OUTREACH_PROBATION_DRAFTS} drafts written under v${current.version}`,
+        version: current.version,
+      };
+  }
   const since = await db
     .collection("checkpoints")
     .find({ objective_id: objectiveId, seq: { $gt: p.started_seq } })
     .sort({ seq: -1 })
     .toArray();
-  if (since.length < p.checkpoints_required)
+  if (since.length < p.checkpoints_required && !isOutreach(objective))
     return {
       evaluated: false,
+      verdict: "pending" as const,
       why: `waiting: ${since.length}/${p.checkpoints_required} checkpoints since probation started`,
       version: current.version,
     };
@@ -497,34 +511,41 @@ export async function evaluateProbation(input: { objective_id: string; agent: st
 const pctText = (v: number | null) => (v === null ? "n/a" : `${Math.round(v)}%`);
 
 /**
- * Outreach probation: kept if the watched QA class's rate (per draft) went down and qa_pass_rate didn't drop.
- * A reasoning change made for a stall (watch_class "stall") is kept only if the pass rate went up.
- * why reads like: "invented-fact: 5 in 8 drafts → 0 in 3; pass rate 38% → 67%. Kept."
+ * Outreach probation, judged only on drafts written under the probation version (settings_version === version),
+ * compared with the drafts before it (this objective's drafts before the change; if none, the parent version's).
+ * Kept if the watched QA class's rate per draft went down (or stayed at 0) and the first-try pass rate didn't drop.
+ * A reasoning change made for a stall (watch_class "stall") is kept only if the first-try pass rate went up.
+ * why: "invented-fact: 5 in 8 drafts → 0 in 3 drafts; first-try pass rate 38% → 67%. Kept."
  */
-async function outreachVerdict(objectiveId: ObjectId, current: HarnessConfig, latest: number | null): Promise<{ kept: boolean; why: string }> {
+async function outreachVerdict(objectiveId: ObjectId, current: HarnessConfig, _latest: number | null): Promise<{ kept: boolean; why: string }> {
   const p = current.probation!;
   const drafts = db.collection("drafts");
-  const count = (created: Document, cls?: string) =>
-    drafts.countDocuments({ objective_id: objectiveId, created_at: created, ...(cls ? { "qa.failures.class": cls } : {}) });
-  const [bHits, bN, aHits, aN] = await Promise.all([
-    count({ $lte: current.created_at }, p.watch_class),
-    count({ $lte: current.created_at }),
-    count({ $gt: current.created_at }, p.watch_class),
-    count({ $gt: current.created_at }),
-  ]);
-  const before = bN ? bHits / bN : 0;
-  const after = aN ? aHits / aN : 0;
-  const base = p.baseline_bearing;
-  const passOk = base === null || (latest !== null && latest >= base);
+  let beforeFilter: Document = { objective_id: objectiveId, created_at: { $lte: current.created_at } };
+  if ((await drafts.countDocuments(beforeFilter)) === 0 && current.parent_version !== null)
+    beforeFilter = { settings_version: current.parent_version };
+  const afterFilter: Document = { settings_version: current.version };
+  const stats = async (f: Document) => {
+    const [hits, n, ft, ftPass] = await Promise.all([
+      drafts.countDocuments({ ...f, "qa.failures.class": p.watch_class }),
+      drafts.countDocuments(f),
+      drafts.countDocuments({ ...f, attempt: 1 }),
+      drafts.countDocuments({ ...f, attempt: 1, "qa.pass": true }),
+    ]);
+    return { hits, n, rate: ft ? (100 * ftPass) / ft : null };
+  };
+  const [b, a] = await Promise.all([stats(beforeFilter), stats(afterFilter)]);
+  const passOk = b.rate === null || a.rate === null || a.rate >= b.rate;
   let kept: boolean;
   let classPart: string;
   if (p.watch_class === "stall") {
-    kept = base === null ? passOk : latest !== null && latest > base;
-    classPart = `stall: pass rate flat before the change`;
+    kept = b.rate === null ? passOk : a.rate !== null && a.rate > b.rate;
+    classPart = `stall: pass rate flat before the change; ${a.n} drafts under v${current.version}`;
   } else {
-    kept = passOk && (after < before || (bHits === 0 && aHits === 0));
-    classPart = `${p.watch_class}: ${bHits} in ${bN} drafts → ${aHits} in ${aN}`;
+    const before = b.n ? b.hits / b.n : 0;
+    const after = a.n ? a.hits / a.n : 0;
+    kept = passOk && (after < before || (b.hits === 0 && a.hits === 0));
+    classPart = `${p.watch_class}: ${b.hits} in ${b.n} drafts → ${a.hits} in ${a.n} drafts`;
   }
-  const why = `${classPart}; pass rate ${pctText(base)} → ${pctText(latest)}. ${kept ? "Kept" : "Rolled back"}.`;
+  const why = `${classPart}; first-try pass rate ${pctText(b.rate)} → ${pctText(a.rate)}. ${kept ? "Kept" : "Undone"}.`;
   return { kept, why };
 }

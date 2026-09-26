@@ -10,6 +10,7 @@ import { GUARDRAIL_MACRO, bearingValue, currentConfig, isOutreach, trackedBearin
 import type { HarnessSettings } from "./fragments";
 
 export const WEIGHTS = { similarity: 0.4, recurrence: 0.3, trend: 0.3 };
+const OUTREACH_SIM_METHOD = "not computed (outreach: QA class map; risk = 0.3·recurrence + 0.3·trend)";
 export const JEV_MODEL = "typesafe/jev-router";
 
 type Action = "recall" | "rollback" | "adjust_settings" | "handoff" | "delegate" | "adapt";
@@ -396,6 +397,11 @@ export class Sentinel {
     });
   }
 
+  /**
+   * Outreach failures carry a deterministic QA class, so the failure → axis map needs no nearest-neighbour recall:
+   * the similarity component is not computed (recorded as 0) and risk = 0.3·recurrence + 0.3·trend. The failure's
+   * memory IS embedded (Voyage) and searchable; it's just not part of the outreach tap score.
+   */
   /** Outreach: judge probation on every checkpoint; a flat qa_pass_rate for 4 checkpoints → reasoning on. */
   private async onOutreachCheckpoint(cp: Document, name: string | null) {
     await this.evaluate(cp.objective_id, `checkpoint ${cp.seq}`);
@@ -419,6 +425,7 @@ export class Sentinel {
       action: "recall",
       settings_version_after: null,
       tap: true,
+      similarity_method: "not computed (stall: checkpoint trigger, trend only)",
       hint: `Stall: ${name} stayed within ±${STALL_POINTS} points for ${STALL_CHECKPOINTS} checkpoints (${vs.slice().reverse().join(" → ")}).`,
     });
     const a = await this.applyOutreach({ objectiveId: cp.objective_id, watch_class: "stall", tapId, risk, stall: true }, config);
@@ -447,11 +454,11 @@ export class Sentinel {
       settings_version_after: null,
       tap,
       hint: tap ? `QA failure ${failure.class}: ${String(failure.context ?? failure.failure ?? "").slice(0, 160)}` : null,
-      similarity_method: "skipped (outreach: deterministic class map)",
+      similarity_method: OUTREACH_SIM_METHOD,
     });
-    if (!tap) return say(`failure ${failure.class}: risk ${risk} < ${config.settings.sentinel_threshold} → no tap`);
+    if (!tap) return say(`failure ${failure.class}: risk ${risk} (rec ${components.recurrence}, trend ${components.trend}; sim not computed) < ${config.settings.sentinel_threshold} → no tap`);
     const a = qaClass ? await this.applyOutreach({ objectiveId, watch_class: failure.class, tapId, risk }, config) : { version: null, detail: "" };
-    say(`failure ${failure.class}: risk ${risk.toFixed(2)} → TAP ${a.version ? "adjust_settings" : "recall"}${a.detail}`);
+    say(`failure ${failure.class}: risk ${risk.toFixed(2)} (rec ${components.recurrence}, trend ${components.trend}; sim not computed) → TAP ${a.version ? "adjust_settings" : "recall"}${a.detail}`);
   }
 
   async onFailure(failure: Document) {

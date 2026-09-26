@@ -67,12 +67,12 @@ export interface NextAccountResult {
   remaining: number;
 }
 
-export const STALE_CLAIM_MS = 5 * 60_000;
+export const STALE_CLAIM_MS = 12 * 60_000; // reasoning-on drafts take up to 300s
 
 /**
  * Claims the next account atomically for `worker` (concurrent workers never get the same account):
  * 1. this worker's own unfinished claim (a retry after a failed first attempt), else
- * 2. the lowest-queue_index account that is pending, or in_progress with a claim older than 5 minutes.
+ * 2. the lowest-queue_index account that is pending, or in_progress with a claim older than 12 minutes.
  * Sets {status: "in_progress", claimed_by: worker, claimed_at}. submit_email sets done/failed on the final attempt.
  */
 export async function next_account(
