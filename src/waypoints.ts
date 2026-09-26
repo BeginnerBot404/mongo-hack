@@ -111,6 +111,16 @@ async function getObjective(id: ObjectId): Promise<Objective> {
   return found;
 }
 
+// Task-neutral wording for standing policies, keyed by normalized failure class.
+const POLICY_LEAD: Record<string, string> = {
+  "overfit-segment": "Before adding a rule, confirm the segment has enough deals (at least 15) and the change helps on unseen deals",
+  "regression": "Change one thing at a time and keep it only if the score on unseen deals does not drop",
+  "invalid-rubric": "Before proposing, check the field and value exist in the data",
+  "skipped-checkpoint": "Save progress immediately after every evaluation",
+  "off-by-one": "Before every fix, check the code for off-by-one bugs",
+  "unit-conversion": "Before every fix, check the code for unit-conversion bugs",
+};
+
 // Background roles (surgeon, sentinel) must not replace the working agent as `last_agent`, or resume reports the wrong previous agent.
 const BACKGROUND_AGENTS = new Set(["surgeon", "sentinel"]);
 async function touchObjective(id: ObjectId, agent: string, now: Date) {
@@ -462,7 +472,7 @@ export async function logFailure(input: {
     class: failureClass,
     occurrences_of_class: occurrences,
     prior_failures_same_class: priorSameClass.map((f) => f._id),
-    suggested_policy: `Before every fix, check the code for ${failureClass} bugs (seen ${occurrences}x, latest: "${seen.length > 90 ? seen.slice(0, 89) + "…" : seen}").`,
+    suggested_policy: `${POLICY_LEAD[failureClass] ?? `Before every change, check for ${failureClass} problems`} (seen ${occurrences}x, latest: "${seen.length > 90 ? seen.slice(0, 89) + "…" : seen}").`,
     is_recurring: occurrences >= 2,
   };
   const doc = {
