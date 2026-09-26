@@ -123,6 +123,12 @@ export async function checkpoint(input: {
 }) {
   const objectiveId = toObjectId(input.objective_id);
   const now = new Date();
+  if (input.waypoint_done !== undefined) {
+    // Validate before bumping the sequence so a bad call doesn't leave a gap in checkpoint numbers.
+    const existing = await getObjective(objectiveId);
+    if (!existing.waypoints.some((w) => w.index === input.waypoint_done))
+      throw new Error(`waypoint_done ${input.waypoint_done} does not exist (0..${existing.waypoints.length - 1})`);
+  }
   // Atomic sequence number per objective.
   const bumped = await objectives().findOneAndUpdate(
     { _id: objectiveId },

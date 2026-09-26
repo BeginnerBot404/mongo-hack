@@ -109,6 +109,7 @@ function argSummary(name: string, a: Record<string, any>): string {
     case "log_decision": return clip(a.decision ?? "", 90);
     case "log_failure": return `[${a.class}] ${clip(a.failure ?? "", 80)}`;
     case "recall": return `"${clip(a.query ?? "", 70)}"${a.kind ? ` kind=${a.kind}` : ""}`;
+    case "adapt": return `failure …${String(a.failure_id ?? "").slice(-6)}${a.explicit_approval ? " (explicit approval)" : ""}`;
     case "resume": return a.objective_id ? `objective ${a.objective_id}` : "latest objective";
     case "read_file": case "write_file": return a.path ?? "";
     default: return clip(JSON.stringify(a), 80);
@@ -142,6 +143,10 @@ function resultSummary(name: string, raw: string): string {
       }
       return lines.join("\n");
     }
+    case "adapt":
+      return j.adopted
+        ? yellow(bold(`⚑ POLICY adopted v${j.version} [${j.class}]: ${clip(String(j.rule), 100)}`))
+        : dim(`gate refused: ${j.gate?.occurrences_of_class ?? "?"} occurrence(s) of class`);
     case "set_objective": return `objective_id ${j.objective_id}`;
     case "checkpoint": return `checkpoint #${j.seq}`;
     case "log_decision": return `decision ${j.decision_id}`;

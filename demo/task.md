@@ -27,6 +27,8 @@ Fix bugs ONLY in `invoice.ts`. Never edit `invoice.test.ts`. One bug fix per edi
    `rounding`) once per failing test that reveals a bug of that class (so a class can be logged more than once),
    and whenever a fix attempt makes the pass count go down. If the returned postmortem has `is_recurring: true`,
    call `adapt` with that failure_id so it becomes a standing policy.
+   Baseline: right after the baseline checkpoint, before the first fix, call `log_failure` once for EACH failing
+   test (one call per test, in order), calling `adapt` whenever a postmortem says `is_recurring: true`.
    If a class already appears in `recent_failures` or `policies`, use `recall` on it first and apply what
    was learned.
 6. Stop when all 10 tests pass and you have written a final checkpoint.
