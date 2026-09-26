@@ -3,7 +3,7 @@
 import { readFileSync } from "node:fs";
 import { waypointsDb as db } from "../clients";
 
-export type AccountStatus = "pending" | "done" | "failed" | "reserve";
+export type AccountStatus = "pending" | "in_progress" | "done" | "failed" | "reserve";
 
 export interface Account {
   account: string;
@@ -15,6 +15,8 @@ export interface Account {
   subsidiary_of: string; // "" when independent
   queue_index: number;
   status: AccountStatus;
+  claimed_by?: string;
+  claimed_at?: Date;
 }
 
 export interface Product {

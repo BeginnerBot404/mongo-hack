@@ -4,6 +4,8 @@ import { mongo, waypointsDb as db } from "../src/clients";
 import { EMBED_DIMENSIONS, VECTOR_INDEX } from "../src/memory";
 import { HARNESS_CONFIG_SCHEMA, seedConfig } from "../src/settings";
 import { ensureSalesIndexes } from "../src/sales/tools";
+import { ensureOutreachIndexes } from "../src/outreach/tools";
+import { SEED_SETTINGS } from "../src/fragments";
 
 if (!process.env.MONGODB_URI) {
   console.error("MONGODB_URI is not set. Nothing to do.");
@@ -12,7 +14,7 @@ if (!process.env.MONGODB_URI) {
 
 type SearchIndexInfo = { name: string; status?: string; queryable?: boolean };
 
-const collections = ["objectives", "checkpoints", "decisions", "failures", "memories", "resumes", "policies", "events", "taps", "opportunities", "rubrics"];
+const collections = ["objectives", "checkpoints", "decisions", "failures", "memories", "resumes", "policies", "events", "taps", "opportunities", "rubrics", "accounts", "drafts"];
 const existing = new Set((await db.listCollections({}, { nameOnly: true }).toArray()).map((c) => c.name));
 for (const name of collections) {
   if (existing.has(name)) continue;
@@ -35,11 +37,19 @@ await db.collection("events").createIndex({ objective_id: 1, created_at: -1 });
 await db.collection("events").createIndex({ created_at: -1 });
 await db.collection("taps").createIndex({ objective_id: 1, status: 1, created_at: -1 });
 await ensureSalesIndexes();
+await ensureOutreachIndexes(db);
 console.log("regular indexes ok");
 
 // harness_config: $jsonSchema validator (collMod when the collection already exists), indexes, seed v1.
 const validation = { validator: { $jsonSchema: HARNESS_CONFIG_SCHEMA }, validationLevel: "strict", validationAction: "error" } as const;
 if (existing.has("harness_config")) {
+  // Migrate versions written before the outreach axes existed: give them the seed's context_sources/granted_tools/reasoning
+  // so strict validation still accepts updates to them (status → superseded etc.).
+  await db.command({ collMod: "harness_config", validationLevel: "off" });
+  for (const f of ["context_sources", "granted_tools", "reasoning"] as const) {
+    const m = await db.collection("harness_config").updateMany({ [`settings.${f}`]: { $exists: false } }, { $set: { [`settings.${f}`]: SEED_SETTINGS[f] } });
+    if (m.modifiedCount) console.log(`harness_config: added settings.${f} to ${m.modifiedCount} old versions`);
+  }
   await db.command({ collMod: "harness_config", ...validation });
   console.log("harness_config validator updated (collMod)");
 } else {

@@ -3,8 +3,11 @@
 import { ObjectId, type Document } from "mongodb";
 import { mongo, waypointsDb as db } from "./clients";
 import {
-  AGENT_TOOLS,
+  CONTEXT_SOURCES,
   FRAGMENT_IDS,
+  GRANTABLE_TOOLS,
+  REASONING_MODES,
+  REQUIRABLE_TOOLS,
   MODELS,
   SEED_SETTINGS,
   SETTINGS_FIELDS,
@@ -16,6 +19,22 @@ import {
 export type ConfigStatus = "active" | "probation" | "kept" | "rolled_back" | "superseded";
 export const CURRENT_STATUSES: ConfigStatus[] = ["active", "probation", "kept"];
 export const PROBATION_CHECKPOINTS = 2;
+/** Outreach probation is longer: one checkpoint per submitted draft, so 3 drafts under the new settings. */
+export const OUTREACH_PROBATION_CHECKPOINTS = 3;
+/**
+ * apply_settings_change field macro for the outreach guardrail axis: ONE version that adds the tool (value, e.g.
+ * "precheck_email") to BOTH granted_tools and required_tools. Stored as change {field: "granted_tools", from, to,
+ * also: {field: "required_tools", from, to}}. It is the only way a version changes two fields.
+ */
+export const GUARDRAIL_MACRO = "guardrail";
+
+/** Outreach objectives: objective.task === "outreach", or a qa_pass_rate bearing. */
+export function isOutreach(objective: Document | null | undefined): boolean {
+  if (!objective) return false;
+  if (objective.task === "outreach") return true;
+  const names = [objective.end_state?.bearing, ...((objective.bearings as Document[] | undefined) ?? []).map((b) => b?.name)];
+  return names.includes("qa_pass_rate");
+}
 
 export interface HarnessConfig {
   _id: ObjectId;
@@ -23,7 +42,7 @@ export interface HarnessConfig {
   status: ConfigStatus;
   settings: HarnessSettings;
   parent_version: number | null;
-  change: { field: SettingsField; from: unknown; to: unknown } | null;
+  change: { field: SettingsField; from: unknown; to: unknown; also?: { field: SettingsField; from: unknown; to: unknown } } | null;
   reason: { kind: "failure" | "tap" | "manual_seed"; id: ObjectId | null; summary: string };
   probation: { checkpoints_required: number; baseline_bearing: number | null; watch_class: string; started_seq: number } | null;
   outcome: { decided_at: Date; verdict: "kept" | "rolled_back"; why: string } | null;
@@ -52,16 +71,29 @@ export const HARNESS_CONFIG_SCHEMA: Document = {
       additionalProperties: false,
       properties: {
         prompt_fragments: { bsonType: "array", uniqueItems: true, items: { enum: [...FRAGMENT_IDS] } },
-        required_tools: { bsonType: "array", uniqueItems: true, items: { enum: [...AGENT_TOOLS] } },
+        required_tools: { bsonType: "array", uniqueItems: true, items: { enum: [...REQUIRABLE_TOOLS] } },
         sentinel_threshold: { bsonType: "number", minimum: 0, maximum: 1 },
         model: { enum: [...MODELS] },
+        context_sources: { bsonType: "array", uniqueItems: true, items: { enum: [...CONTEXT_SOURCES] } },
+        granted_tools: { bsonType: "array", uniqueItems: true, items: { enum: [...GRANTABLE_TOOLS] } },
+        reasoning: { enum: [...REASONING_MODES] },
       },
     },
     parent_version: { bsonType: ["number", "null"] },
     change: nullable({
       required: ["field", "from", "to"],
       additionalProperties: false,
-      properties: { field: { enum: [...SETTINGS_FIELDS] }, from: changeValue, to: changeValue },
+      properties: {
+        field: { enum: [...SETTINGS_FIELDS] },
+        from: changeValue,
+        to: changeValue,
+        also: {
+          bsonType: "object",
+          required: ["field", "from", "to"],
+          additionalProperties: false,
+          properties: { field: { enum: [...SETTINGS_FIELDS] }, from: changeValue, to: changeValue },
+        },
+      },
     }),
     reason: {
       bsonType: "object",
@@ -148,7 +180,19 @@ export function gateChange(field: string, value: unknown, current: HarnessSettin
       result = strArray(value, FRAGMENT_IDS, "prompt_fragments");
       break;
     case "required_tools":
-      result = strArray(value, AGENT_TOOLS, "required_tools");
+      result = strArray(value, REQUIRABLE_TOOLS, "required_tools");
+      break;
+    case "context_sources":
+      result = strArray(value, CONTEXT_SOURCES, "context_sources");
+      break;
+    case "granted_tools":
+      result = strArray(value, GRANTABLE_TOOLS, "granted_tools");
+      break;
+    case "reasoning":
+      result =
+        typeof value === "string" && (REASONING_MODES as readonly string[]).includes(value)
+          ? { passed: true, value }
+          : { passed: false, why: `reasoning must be one of ${REASONING_MODES.join(", ")}` };
       break;
     case "sentinel_threshold":
       result =
@@ -202,10 +246,30 @@ export async function applySettingsChange(input: {
 
   if (current.status === "probation")
     return { applied: false, gate: { passed: false, why: `v${current.version} is still on probation; one change at a time` } };
-  const check = gateChange(input.field, input.value, current.settings);
+  // Guardrail macro: one version adding a tool to granted_tools AND required_tools (see GUARDRAIL_MACRO).
+  let also: { field: SettingsField; from: unknown; to: unknown } | undefined;
+  let fieldName = input.field;
+  let value = input.value;
+  if (input.field === GUARDRAIL_MACRO) {
+    const tool = Array.isArray(input.value) ? input.value[0] : input.value;
+    if (typeof tool !== "string" || !(GRANTABLE_TOOLS as readonly string[]).includes(tool) || !(REQUIRABLE_TOOLS as readonly string[]).includes(tool))
+      return { applied: false, gate: { passed: false, why: `guardrail value must be a tool that can be both granted and required (precheck_email)` } };
+    const s = current.settings;
+    const grant = s.granted_tools.includes(tool as never) ? null : [...s.granted_tools, tool];
+    const require = s.required_tools.includes(tool as never) ? null : [...s.required_tools, tool];
+    if (!grant && !require) return { applied: false, gate: { passed: false, why: `${tool} is already granted and required` } };
+    if (grant && require) {
+      const r = gateChange("required_tools", require, s);
+      if (!r.passed) return { applied: false, gate: r };
+      also = { field: "required_tools", from: s.required_tools, to: r.value };
+    }
+    fieldName = grant ? "granted_tools" : "required_tools";
+    value = grant ?? require;
+  }
+  const check = gateChange(fieldName, value, current.settings);
   if (!check.passed) return { applied: false, gate: check };
 
-  const field = input.field as SettingsField;
+  const field = fieldName as SettingsField;
   const lastCheckpoint = await db.collection("checkpoints").findOne({ objective_id: objectiveId }, { sort: { seq: -1 } });
   const bearingName = trackedBearingName(objective);
   let watchClass = input.watch_class ?? "regression";
@@ -228,12 +292,12 @@ export async function applySettingsChange(input: {
     _id: new ObjectId(),
     version: current.version + 1,
     status: "probation",
-    settings: { ...structuredClone(current.settings), [field]: check.value } as HarnessSettings,
+    settings: { ...structuredClone(current.settings), [field]: check.value, ...(also ? { [also.field]: also.to } : {}) } as HarnessSettings,
     parent_version: current.version,
-    change: { field, from: current.settings[field], to: check.value },
+    change: { field, from: current.settings[field], to: check.value, ...(also ? { also } : {}) },
     reason: { kind: input.reason.kind, id: reasonId, summary: input.reason.summary },
     probation: {
-      checkpoints_required: PROBATION_CHECKPOINTS,
+      checkpoints_required: isOutreach(objective) ? OUTREACH_PROBATION_CHECKPOINTS : PROBATION_CHECKPOINTS,
       baseline_bearing: bearingValue(lastCheckpoint, bearingName),
       watch_class: watchClass,
       started_seq: (lastCheckpoint?.seq as number | undefined) ?? 0,
@@ -263,7 +327,9 @@ export async function applySettingsChange(input: {
     status: doc.status,
     change: doc.change,
     probation: doc.probation,
-    text: `Settings v${doc.version} (probation): ${field} ${describe(doc.change!.from)} → ${describe(doc.change!.to)}`,
+    text:
+      `Settings v${doc.version} (probation): ${field} ${describe(doc.change!.from)} → ${describe(doc.change!.to)}` +
+      (also ? ` and ${also.field} ${describe(also.from)} → ${describe(also.to)}` : ""),
   };
 }
 
@@ -287,7 +353,14 @@ async function rollbackTo(current: HarnessConfig, why: string, session: any) {
     status: "active",
     settings: structuredClone(parent.settings),
     parent_version: current.version,
-    change: current.change ? { field: current.change.field, from: current.change.to, to: current.change.from } : null,
+    change: current.change
+      ? {
+          field: current.change.field,
+          from: current.change.to,
+          to: current.change.from,
+          ...(current.change.also ? { also: { field: current.change.also.field, from: current.change.also.to, to: current.change.also.from } } : {}),
+        }
+      : null,
     reason: { kind: current.reason.kind, id: current.reason.id, summary: `Rollback of v${current.version}: ${why}` },
     probation: null,
     outcome: null,
@@ -342,18 +415,23 @@ export async function evaluateProbation(input: { objective_id: string; agent: st
     };
 
   const latest = bearingValue(since[0] ?? null, trackedBearingName(objective));
+  let kept: boolean;
+  let why: string;
+  if (isOutreach(objective)) {
+    ({ kept, why } = await outreachVerdict(objectiveId, current, latest));
+  } else {
   const recurred = await db
     .collection("failures")
     .countDocuments({ objective_id: objectiveId, class: p.watch_class, created_at: { $gt: current.created_at } });
   const bearingOk = p.baseline_bearing === null || (latest !== null && latest >= p.baseline_bearing);
-  const kept = bearingOk && recurred === 0;
+  kept = bearingOk && recurred === 0;
   // Before/after on the watched class: parent version's window vs this version's, counted in checkpoints.
   const [before, cpBefore] = await Promise.all([
     db.collection("failures").countDocuments({ objective_id: objectiveId, class: p.watch_class, created_at: { $lte: current.created_at } }),
     db.collection("checkpoints").countDocuments({ objective_id: objectiveId, seq: { $lte: p.started_seq } }),
   ]);
   const delta = `v${current.parent_version}: ${before} ${p.watch_class} in ${cpBefore} checkpoints → v${current.version}: ${recurred} in ${since.length}`;
-  const why = kept
+  why = kept
     ? `${delta}; bearing ${latest} ≥ baseline ${p.baseline_bearing}`
     : [delta,
         !bearingOk ? `bearing ${latest} < baseline ${p.baseline_bearing}` : "",
@@ -361,6 +439,7 @@ export async function evaluateProbation(input: { objective_id: string; agent: st
       ]
         .filter(Boolean)
         .join("; ");
+  }
 
   let restored: HarnessConfig | null = null;
   const session = mongo.startSession();
@@ -411,4 +490,41 @@ export async function evaluateProbation(input: { objective_id: string; agent: st
     why,
     active_version: r ? r.version : current.version,
   };
+}
+
+// ---- outreach verdict --------------------------------------------------------------------------
+
+const pctText = (v: number | null) => (v === null ? "n/a" : `${Math.round(v)}%`);
+
+/**
+ * Outreach probation: kept if the watched QA class's rate (per draft) went down and qa_pass_rate didn't drop.
+ * A reasoning change made for a stall (watch_class "stall") is kept only if the pass rate went up.
+ * why reads like: "invented-fact: 5 in 8 drafts → 0 in 3; pass rate 38% → 67%. Kept."
+ */
+async function outreachVerdict(objectiveId: ObjectId, current: HarnessConfig, latest: number | null): Promise<{ kept: boolean; why: string }> {
+  const p = current.probation!;
+  const drafts = db.collection("drafts");
+  const count = (created: Document, cls?: string) =>
+    drafts.countDocuments({ objective_id: objectiveId, created_at: created, ...(cls ? { "qa.failures.class": cls } : {}) });
+  const [bHits, bN, aHits, aN] = await Promise.all([
+    count({ $lte: current.created_at }, p.watch_class),
+    count({ $lte: current.created_at }),
+    count({ $gt: current.created_at }, p.watch_class),
+    count({ $gt: current.created_at }),
+  ]);
+  const before = bN ? bHits / bN : 0;
+  const after = aN ? aHits / aN : 0;
+  const base = p.baseline_bearing;
+  const passOk = base === null || (latest !== null && latest >= base);
+  let kept: boolean;
+  let classPart: string;
+  if (p.watch_class === "stall") {
+    kept = base === null ? passOk : latest !== null && latest > base;
+    classPart = `stall: pass rate flat before the change`;
+  } else {
+    kept = passOk && (after < before || (bHits === 0 && aHits === 0));
+    classPart = `${p.watch_class}: ${bHits} in ${bN} drafts → ${aHits} in ${aN}`;
+  }
+  const why = `${classPart}; pass rate ${pctText(base)} → ${pctText(latest)}. ${kept ? "Kept" : "Rolled back"}.`;
+  return { kept, why };
 }

@@ -9,10 +9,7 @@ import { qa, sentences, type Draft, type QaFailure, type QaResult } from "./qa";
 export { qa, PRODUCTS, productCatalogText, type Account, type Product, type QaResult, type QaFailure };
 export { QA_CLASSES, type QaClass } from "./qa";
 
-export const CONTEXT_SOURCES = ["account_name", "account_summary", "account_record_full", "product_catalog"] as const;
-export type ContextSource = (typeof CONTEXT_SOURCES)[number];
-export const GRANTABLE_TOOLS = ["outline_email", "precheck_email", "lookup_account"] as const;
-export type GrantableTool = (typeof GRANTABLE_TOOLS)[number];
+export { CONTEXT_SOURCES, GRANTABLE_TOOLS, REASONING_MODES, type ContextSource, type GrantableTool, type ReasoningMode } from "../fragments";
 export const MAX_ATTEMPTS = 2;
 
 export interface DraftDoc {
@@ -25,6 +22,7 @@ export interface DraftDoc {
   settings_version: number | null;
   attempt: number;
   agent: string;
+  worker?: string;
   created_at: Date;
 }
 
@@ -69,10 +67,34 @@ export interface NextAccountResult {
   remaining: number;
 }
 
-export async function next_account(input: { objective_id: string; context_sources?: readonly string[] }, db: Db = waypointsDb): Promise<NextAccountResult> {
-  const acc = (await db.collection<Account>("accounts").findOne({ status: "pending" }, { sort: { queue_index: 1 }, projection: { _id: 0 } })) as Account | null;
-  const remaining = await db.collection("accounts").countDocuments({ status: "pending" });
-  if (!acc) return { done: true, account: null, view: null, attempt: 0, previous_failures: [], remaining: 0 };
+export const STALE_CLAIM_MS = 5 * 60_000;
+
+/**
+ * Claims the next account atomically for `worker` (concurrent workers never get the same account):
+ * 1. this worker's own unfinished claim (a retry after a failed first attempt), else
+ * 2. the lowest-queue_index account that is pending, or in_progress with a claim older than 5 minutes.
+ * Sets {status: "in_progress", claimed_by: worker, claimed_at}. submit_email sets done/failed on the final attempt.
+ */
+export async function next_account(
+  input: { objective_id: string; context_sources?: readonly string[]; worker?: string },
+  db: Db = waypointsDb,
+): Promise<NextAccountResult> {
+  const worker = input.worker ?? "default";
+  const coll = db.collection<Account>("accounts");
+  const now = new Date();
+  let acc = (await coll.findOneAndUpdate(
+    { status: "in_progress", claimed_by: worker } as Document,
+    { $set: { claimed_at: now } },
+    { sort: { queue_index: 1 }, projection: { _id: 0 }, returnDocument: "after" },
+  )) as Account | null;
+  if (!acc)
+    acc = (await coll.findOneAndUpdate(
+      { $or: [{ status: "pending" }, { status: "in_progress", claimed_at: { $lt: new Date(now.getTime() - STALE_CLAIM_MS) } }] } as Document,
+      { $set: { status: "in_progress", claimed_by: worker, claimed_at: now } },
+      { sort: { queue_index: 1 }, projection: { _id: 0 }, returnDocument: "after" },
+    )) as Account | null;
+  const remaining = await coll.countDocuments({ status: { $in: ["pending", "in_progress"] } });
+  if (!acc) return { done: true, account: null, view: null, attempt: 0, previous_failures: [], remaining };
   const prior = await db
     .collection<DraftDoc>("drafts")
     .find({ objective_id: objKey(input.objective_id), account: acc.account })
@@ -153,6 +175,8 @@ export interface SubmitInput {
   body: string;
   agent: string;
   settings_version?: number | null;
+  /** Concurrent worker id (stored on the draft). */
+  worker?: string;
   /** When true (the harness sets it when required_tools has precheck_email), refuse drafts precheck_email didn't see. */
   require_precheck?: boolean;
 }
@@ -163,7 +187,7 @@ export type SubmitResult =
       pass: boolean;
       failures: QaFailure[];
       attempt: number;
-      account_status: "done" | "failed" | "pending";
+      account_status: "done" | "failed" | "in_progress";
       retry_allowed: boolean;
       draft_id: string;
     };
@@ -171,7 +195,8 @@ export type SubmitResult =
 export async function submit_email(input: SubmitInput, db: Db = waypointsDb): Promise<SubmitResult> {
   const acc = (await db.collection<Account>("accounts").findOne({ account: input.account })) as Account | null;
   if (!acc) return { refused: true, why: `no account named "${input.account}"` };
-  if (acc.status !== "pending") return { refused: true, why: `${input.account} is not in the pending queue (status ${acc.status})` };
+  if (acc.status !== "pending" && acc.status !== "in_progress")
+    return { refused: true, why: `${input.account} is not in the work queue (status ${acc.status})` };
   if (input.require_precheck && !wasPrechecked(input))
     return { refused: true, why: "precheck_email is required: call it on this exact draft (same subject and body) before submit_email" };
   const objective_id = objKey(input.objective_id);
@@ -192,18 +217,22 @@ export async function submit_email(input: SubmitInput, db: Db = waypointsDb): Pr
     settings_version,
     attempt,
     agent: String(input.agent ?? "unknown"),
+    ...(input.worker ? { worker: input.worker } : {}),
     created_at: new Date(),
   };
   const { insertedId } = await db.collection("drafts").insertOne(doc);
-  const account_status = result.pass ? "done" : attempt >= MAX_ATTEMPTS ? "failed" : "pending";
-  if (account_status !== "pending") await db.collection("accounts").updateOne({ account: input.account }, { $set: { status: account_status } });
+  const account_status = result.pass ? "done" : attempt >= MAX_ATTEMPTS ? "failed" : "in_progress";
+  // Final attempt: done/failed. First failed attempt: stays in_progress, claimed by the same worker for its retry.
+  if (account_status !== "in_progress")
+    await db.collection("accounts").updateOne({ account: input.account }, { $set: { status: account_status }, $unset: { claimed_by: "", claimed_at: "" } });
+  else await db.collection("accounts").updateOne({ account: input.account }, { $set: { status: "in_progress", claimed_at: new Date(), ...(input.worker ? { claimed_by: input.worker } : {}) } });
   return {
     refused: false,
     pass: result.pass,
     failures: result.failures,
     attempt,
     account_status,
-    retry_allowed: account_status === "pending",
+    retry_allowed: account_status === "in_progress",
     draft_id: insertedId.toHexString(),
   };
 }
@@ -214,6 +243,8 @@ export interface QueueStats {
   done: number; // accounts finished (passed or failed out)
   passed: number;
   failed: number;
+  in_progress: number; // claimed by a worker, not finished
+  pending: number;
   total: number; // queue size (accounts not in reserve)
   submissions: number;
   first_try_pass_rate: number; // % of attempt-1 drafts that passed (0..100)
@@ -222,8 +253,8 @@ export interface QueueStats {
 
 const pct = (a: number, b: number) => (b ? Math.round((1000 * a) / b) / 10 : 0);
 
-export async function getQueueStats(input: { objective_id: string }, db: Db = waypointsDb): Promise<QueueStats> {
-  const objective_id = objKey(input.objective_id);
+export async function getQueueStats(input: { objective_id: string } | string, db: Db = waypointsDb): Promise<QueueStats> {
+  const objective_id = objKey(typeof input === "string" ? input : String(input.objective_id));
   const [byStatus, firsts, last10, submissions] = await Promise.all([
     db.collection("accounts").aggregate([{ $group: { _id: "$status", n: { $sum: 1 } } }]).toArray(),
     db.collection("drafts").find({ objective_id, attempt: 1 }, { projection: { "qa.pass": 1 } }).toArray(),
@@ -235,7 +266,9 @@ export async function getQueueStats(input: { objective_id: string }, db: Db = wa
     done: n("done") + n("failed"),
     passed: n("done"),
     failed: n("failed"),
-    total: n("done") + n("failed") + n("pending"),
+    in_progress: n("in_progress"),
+    pending: n("pending"),
+    total: n("done") + n("failed") + n("pending") + n("in_progress"),
     submissions,
     first_try_pass_rate: pct(firsts.filter((d) => d.qa?.pass).length, firsts.length),
     rolling_pass_rate_10: pct(last10.filter((d) => d.qa?.pass).length, last10.length),
@@ -244,8 +277,8 @@ export async function getQueueStats(input: { objective_id: string }, db: Db = wa
 
 /** Put the queue back: first QUEUE_SIZE accounts pending, the rest reserve; drafts cleared; precheck memory cleared. */
 export async function resetOutreach(db: Db = waypointsDb, size = queueSize()): Promise<{ pending: number; drafts_deleted: number }> {
-  await db.collection("accounts").updateMany({ queue_index: { $lt: size } }, { $set: { status: "pending" } });
-  await db.collection("accounts").updateMany({ queue_index: { $gte: size } }, { $set: { status: "reserve" } });
+  await db.collection("accounts").updateMany({ queue_index: { $lt: size } }, { $set: { status: "pending" }, $unset: { claimed_by: "", claimed_at: "" } });
+  await db.collection("accounts").updateMany({ queue_index: { $gte: size } }, { $set: { status: "reserve" }, $unset: { claimed_by: "", claimed_at: "" } });
   const { deletedCount } = await db.collection("drafts").deleteMany({});
   prechecked.clear();
   return { pending: await db.collection("accounts").countDocuments({ status: "pending" }), drafts_deleted: deletedCount };

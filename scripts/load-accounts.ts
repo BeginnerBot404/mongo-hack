@@ -13,7 +13,7 @@ const res = await accounts().bulkWrite(
   rows.map((r) => {
     const prev = existing.get(r.account);
     const inQueue = r.queue_index < size;
-    const status = !inQueue ? "reserve" : prev === "done" || prev === "failed" ? prev : "pending";
+    const status = !inQueue ? "reserve" : prev === "done" || prev === "failed" ? prev : "pending"; // an in_progress claim from a dead run goes back to pending
     return { replaceOne: { filter: { account: r.account }, replacement: { ...r, status }, upsert: true } };
   }),
 );
