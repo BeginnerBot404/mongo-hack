@@ -26,6 +26,7 @@ File tool paths are absolute: $REPO/demo/fixture/invoice.ts and $REPO/demo/fixtu
 SPEED (you have ~60s before a possible kill): be terse, no narration. Waypoints (MCP) tools go ONE per turn, never
 batched with anything. Turn 1 = resume only. Turn 2 = read both files in parallel. Then set_objective (if resume found
 none), then bun test. log_failure/adapt one per turn. Skip recall unless resume returned prior failures.
+Edit with ONE terminal call: perl -pi -e 's/<old>/<new>/' invoice.ts (the patch tool is slow). One bug per edit.
 
 $(cat "$REPO/demo/task.md")"
 

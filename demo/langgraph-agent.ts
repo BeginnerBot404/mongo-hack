@@ -212,7 +212,8 @@ async function main() {
       `and for any class in recent_failures or policies you have not recalled yet. Then, before editing, write one line ` +
       `of plain text starting with "MEMORY:" that names the earlier failure (its class and id) and the agent that ` +
       `logged it, and how it shapes your fix, e.g. "MEMORY: failure 66f... [unit-conversion] logged by hermes -> ` +
-      `divide minutes by 60, not 100". Repeat recall + MEMORY line whenever you move to a new failure class.`,
+      `divide minutes by 60, not 100". Repeat recall + MEMORY line whenever you move to a new failure class; if recall finds no earlier ` +
+      `failure of that class, skip the MEMORY line.`,
   );
   const kickoff = FRESH
     ? `Start FRESH: call resume first only to read policies and recent failures, then call set_objective for a NEW objective (ignore any previous objective's progress). The fixture was reset to its buggy state.`

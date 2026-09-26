@@ -25,9 +25,9 @@ edit (never two edits without a test run in between).
 4. Failures: `log_failure` once per BUG, not per test (a bug that breaks several tests is logged once). Use a short
    snake_case `class`: `off_by_one`, `unit_conversion`, `rounding`. If the postmortem says `is_recurring: true`,
    call `adapt` with that failure_id (it becomes a standing policy).
-   Baseline: right after the baseline checkpoint, before the first fix, log exactly these two bugs, one call
-   each: billableDays (off_by_one), then paginate (off_by_one; recurring -> `adapt`). The rest get logged when
-   their fix comes up. Then start fixing.
+   Baseline: right after the baseline checkpoint, before the first fix, log exactly these three bugs, one call
+   each, in order: billableDays (off_by_one), paginate (off_by_one; recurring -> `adapt`), hoursFromMinutes
+   (unit_conversion). The rest get logged when their fix comes up. Then start fixing.
    Later: right before fixing any bug that is not yet logged (see `recent_failures`), log it with one call
    (adapt if recurring). Also log a failure whenever a fix makes the pass count go down.
 5. `log_decision` only for an actual edit, one call per edit, right before or right after that edit: decision = the exact change (one line), rationale = one short sentence, evidence = the failing assertion.

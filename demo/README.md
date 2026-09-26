@@ -3,7 +3,7 @@
 Task: fix the 5 planted bugs in `demo/fixture/invoice.ts` so all 10 tests pass (2x `off_by_one`, 2x `unit_conversion`, 1x `rounding`).
 Spec both harnesses follow: `demo/task.md`. Bearing: `tests_passing` (target 10). Needs `MONGODB_URI`, `VOYAGE_API_KEY`, and `OPENROUTER_API_KEY` in the repo `.env`.
 
-0. `bun run demo:clean` deletes the demo objectives' documents from the Waypoints DB (`WAYPOINTS_DB`, default `waypoints`; indexes untouched), then resets the fixture.
+0. `bun run demo:clean` deletes ALL documents in the Waypoints collections (`WAYPOINTS_DB`, default `waypoints`; indexes and other databases untouched), so the first `resume` finds nothing stale, then resets the fixture.
 1. `bun run demo:reset` restores the buggy fixture from `demo/fixture-template/`.
 2. `bun run demo:hermes` starts Hermes Agent (Nous Research) on OpenRouter. It mounts the Waypoints MCP server, calls resume, then set_objective, and checkpoints after each test run. The script prints its pid.
 3. After a checkpoint or two, run `kill -9 <pid>` from a second terminal. That simulates a crash: no graceful shutdown and no handoff.
