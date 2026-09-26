@@ -157,3 +157,23 @@ main.replaying { padding-bottom: 96px; }
 .range::-moz-range-thumb { width: 6px; height: 30px; background: #fff; border-radius: 3px; border: 0; }
 .tick { position: absolute; top: 2px; width: 6px; height: 26px; margin-left: -3px; border: 0; border-radius: 2px; padding: 0; z-index: 3; cursor: pointer; }
 .tick:hover { transform: scaleX(1.8); }
+
+/* ---- story (default view) ---- */
+.story { display: flex; flex-direction: column; gap: 0; }
+.sbox { background: var(--panel); border: 2px solid var(--line); border-left: 8px solid #475569; border-radius: 10px; padding: 10px 16px; }
+.sbox.hot { border-color: #e2e8f0; box-shadow: 0 0 0 2px rgba(226,232,240,0.25); }
+.sbox.warnbox { border-left-color: #f97316; }
+.sbox.selfbox { border-left-color: #facc15; }
+.sbox.okbox { border-left-color: #22c55e; }
+.sbox.badbox { border-left-color: #e11d48; }
+.snum { font-size: 15px; font-weight: 900; letter-spacing: 0.1em; color: var(--soft); }
+.stext { font-size: 23px; font-weight: 700; line-height: 1.3; margin-top: 4px; }
+.stext q { color: #fde68a; }
+.sbig { font-size: 26px; font-weight: 800; margin-top: 4px; }
+.sbig b { font-family: var(--mono); font-size: 34px; }
+.sgoal { font-size: 19px; color: #7dd3fc; font-weight: 700; }
+.ssub { font-size: 18px; color: var(--soft); font-weight: 600; margin-top: 4px; }
+.story .good { color: var(--ok); } .story .bad { color: var(--fail); }
+.sarrow { text-align: center; color: #64748b; font-size: 20px; line-height: 22px; font-weight: 900; }
+details.more { margin-top: 12px; }
+details.more > summary { cursor: pointer; color: var(--soft); font-weight: 800; font-size: 16px; padding: 6px 0; }

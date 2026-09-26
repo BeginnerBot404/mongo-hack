@@ -113,38 +113,38 @@ function moments(s: State, primary?: string, unit?: string, down = false): Momen
     if (r.from_checkpoint_seq == null) continue;
     const cp = cps.find((c) => c.seq === r.from_checkpoint_seq);
     const b = bearingOf(cp, primary);
-    out.push({ key: `res:${r._id}`, kind: "resumed", title: `⟳ RESUMED FROM ATLAS @ checkpoint #${r.from_checkpoint_seq}`, sub: `${pretty(primary)} ${fmtB(b.current, unit)} · state, bearing and next action rebuilt from Atlas`, at: t(r.created_at) });
+    out.push({ key: `res:${r._id}`, kind: "resumed", title: "⟳ RESUMED where it left off", sub: `from save point #${r.from_checkpoint_seq} (score ${fmtB(b.current, unit)}) — everything came back from Atlas`, at: t(r.created_at) });
   }
   for (const f of s.failures) {
     if (fclass(f) !== "regression") continue;
     const m = /from (-?[\d.]+%?) to (-?[\d.]+%?)/.exec(String(f.failure ?? ""));
-    out.push({ key: `reg:${f._id}`, kind: "regression", title: `▼ REGRESSION ${m ? `${m[1]} → ${m[2]}` : ""}`, sub: "a change made the bearing worse · the server logged it itself", at: t(f.created_at) });
+    out.push({ key: `reg:${f._id}`, kind: "regression", title: `▼ PROBLEM: score dropped${m ? ` ${fmtB(Number(m[1].replace("%", "")), unit)} → ${fmtB(Number(m[2].replace("%", "")), unit)}` : ""}`, sub: "its last change made things worse — caught automatically", at: t(f.created_at) });
   }
   for (const tp of s.taps) {
     if (!tp.decision?.tap) continue;
-    out.push({ key: `tap:${tp._id}`, kind: "tap", title: `▲ SENTINEL TAP ${num(tp.risk)}`, sub: `→ ${tp.decision.action}${tp.settings_version_after != null ? ` (v${tp.settings_version_after})` : ""}`, bars: tp.components, at: t(tp.created_at) });
+    out.push({ key: `tap:${tp._id}`, kind: "tap", title: `▲ ALERT · risk ${num(tp.risk)}`, sub: tp.decision.action === "adjust_settings" ? "the watcher says: change the playbook" : tp.decision.action === "adapt" ? "the watcher says: add a rule for this" : "the watcher says: look at what happened last time", bars: tp.components, at: t(tp.created_at) });
   }
   for (const c of s.harness_config) {
     if (c.created_by === "seed" || c.version === 1) continue;
-    if (c.probation) out.push({ key: `ver:${c._id}`, kind: "settings", title: `✚ SETTINGS v${c.version} PROBATION`, sub: diffLabel(c), at: t(c.created_at) });
+    if (c.probation) out.push({ key: `ver:${c._id}`, kind: "settings", title: "✚ HARNESS CHANGED ITSELF", sub: (() => { const d = fragDiff(c.change); return d.add.length ? `new playbook rule (on trial): “${play(d.add[0])}”` : d.del.length ? `removed: “${play(d.del[0])}”` : diffLabel(c); })(), at: t(c.created_at) });
     if (c.outcome?.verdict)
       out.push({
         key: `out:${c._id}`,
         kind: c.outcome.verdict === "kept" ? "kept" : "rolled",
-        title: c.outcome.verdict === "kept" ? `✔ v${c.version} KEPT` : `↩ v${c.version} ROLLED BACK`,
-        sub: one(c.outcome.why),
+        title: c.outcome.verdict === "kept" ? "✔ KEPT — the change worked" : "↩ UNDONE — the change didn't help",
+        sub: c.outcome.verdict === "kept" ? "the playbook change stays" : "automatically rolled back to the previous playbook",
         at: t(c.outcome.decided_at),
       });
   }
   for (const r of s.rubrics) {
     const flags: string[] = r.flags ?? [];
     if (flags.some((x) => /overfit/.test(x)))
-      out.push({ key: `rub:${r._id}`, kind: "regression", title: `⚠ OVERFIT · rubric v${r.version}`, sub: `gap ${num(r.gap)} train→holdout · ${one(r.change_summary)}`, at: t(r.created_at) });
+      out.push({ key: `rub:${r._id}`, kind: "regression", title: "⚠ PROBLEM: overfitting", sub: `a rule that fits past deals but not new ones — caught automatically`, at: t(r.created_at) });
   }
   const last = cps[cps.length - 1];
   const lb = bearingOf(last, primary);
   if (last && lb.current !== null && lb.target !== null && reached(lb.current, lb.target, down))
-    out.push({ key: `green:${last._id}`, kind: "kept", title: `✔ END STATE REACHED · ${fmtB(lb.current, unit)}`, sub: "end state reached · destination never changed", at: t(last.created_at) });
+    out.push({ key: `green:${last._id}`, kind: "kept", title: `✔ GOAL REACHED · ${fmtB(lb.current, unit)}`, sub: "the goal never changed — only the route did", at: t(last.created_at) });
   return out.sort((a, b) => a.at - b.at);
 }
 
@@ -470,8 +470,8 @@ function Banner({ m, crash }: { m: Moment | null; crash: { secs: number; seq: nu
     return (
       <div className="banner b-crashed">
         <div className="bmain">
-          <div className="btitle">✖ HARNESS CRASHED · {crash.secs}s</div>
-          <div className="bsub">process gone · everything it knew is safe in Atlas{crash.seq != null ? ` @ checkpoint #${crash.seq}` : ""}</div>
+          <div className="btitle">✖ CRASHED — progress is safe in Atlas</div>
+          <div className="bsub">agent process killed {crash.secs}s ago · last save point #{crash.seq ?? "?"}</div>
         </div>
       </div>
     );
@@ -691,6 +691,148 @@ function ReplaySummary({ rp }: { rp: ReplayInfo }) {
   );
 }
 
+// ---------- plain English ----------
+const PLAYBOOK: Record<string, string> = {
+  checkpoint_every_test: "Save progress after every test run.",
+  recall_before_edit: "Look up what went wrong last time before editing.",
+  verify_whole_suite: "After a fix, re-run all the tests and undo anything that broke.",
+  one_change_per_edit: "Fix one bug per edit.",
+  read_policies_first: "Re-read its own rules before the first edit.",
+  min_support_15: "Only use segments with at least 15 deals.",
+  one_change_per_iteration: "Change only one rule at a time, so each change can be measured.",
+  checkpoint_every_eval: "Save progress right after every scoring run.",
+  check_schema_first: "Check which fields exist before proposing a rule.",
+};
+const play = (id: string) => PLAYBOOK[id] ?? id.replace(/_/g, " ");
+const PROBLEM: Record<string, string> = {
+  overfit_segment: "overfitting",
+  regression: "score drops",
+  skipped_checkpoint: "skipped saves",
+  invalid_rubric: "invalid rules",
+  corrupt_write: "corrupt file writes",
+};
+const problemName = (cls: string) => PROBLEM[cls.replace(/-/g, "_")] ?? cls.replace(/[-_]/g, " ");
+const scoreLabel = (name?: string) =>
+  name === "holdout_auc" ? "score on deals it has never seen" : name === "a_grade_win_rate" ? "win rate of A-graded deals" : name === "tests_passing" ? "tests passing" : pretty(name);
+const ago = (at: number, now: number) => {
+  const sec = Math.max(0, Math.round((now - at) / 1000));
+  return sec < 60 ? `${sec}s ago` : sec < 3600 ? `${Math.round(sec / 60)} min ago` : `${Math.round(sec / 3600)} h ago`;
+};
+
+/** "+ up_sale=Yes (+2)" → "deals where up sale is Yes get +2 points" */
+function ruleInWords(line: string): string {
+  const m = /^([+\-−~])\s*([\w]+)\s*=\s*([^()]+?)\s*(?:\(([+\-−]?\d+)\))?$/.exec(line.trim());
+  if (!m) return line;
+  const [, op, field, value, pts] = m;
+  const who = `deals where ${field.replace(/_/g, " ")} is ${value.trim()}`;
+  const p = pts ? pts.replace("−", "-") : "";
+  if (op === "+") return `${who} get ${p ? `${/^[+-]/.test(p) ? p : `+${p}`} points` : "points"}`;
+  if (op === "-" || op === "−") return `no longer scoring ${who}`;
+  return `re-weighted ${who}${pts ? ` to ${pts} points` : ""}`;
+}
+
+function problemInWords(f: Doc, s: State, primary?: string, unit?: string): string {
+  const cls = fclass(f);
+  const txt = `${f.failure ?? ""} ${f.context ?? ""}`;
+  if (cls === "overfit_segment") {
+    const m = /(?:support|only|on)\s*(?:of\s*)?(\d+)\s*(?:train\s*)?deals?/i.exec(txt) ?? /(\d+)\s*train deals/i.exec(txt);
+    return m ? `It added a rule based on only ${m[1]} deals — that's overfitting. Caught automatically.` : "It added a rule that fits past deals but not new ones — that's overfitting. Caught automatically.";
+  }
+  if (cls === "regression") {
+    const m = /from (-?[\d.]+) to (-?[\d.]+)/.exec(txt);
+    return `Its last change made the score drop${m ? ` (${fmtB(Number(m[1]), unit)} → ${fmtB(Number(m[2]), unit)})` : ""}. Caught automatically.`;
+  }
+  if (cls === "skipped_checkpoint") return "It skipped saving its progress. The harness saved it anyway and logged it.";
+  if (cls === "invalid_rubric") return "It proposed a rule using a field or value that doesn't exist. Rejected automatically.";
+  if (cls === "corrupt_write") return "It tried to write a broken file. The harness rejected it.";
+  return `It hit a problem: ${one(f.failure).slice(0, 140)}`;
+}
+
+function Story({ s, primary, target, unit, down, now, curCfgs }: { s: State; primary?: string; target: number; unit?: string; down: boolean; now: number; curCfgs: Doc[] }) {
+  const o = s.objective!;
+  const sales = primary === "holdout_auc" || s.rubrics.length > 0;
+  const vals = s.checkpoints.map((c) => bearingOf(c, primary).current).filter((x): x is number => x !== null);
+  const first = vals[0] ?? (s.rubrics[0]?.metrics?.holdout?.auc as number | undefined) ?? null;
+  const last = vals[vals.length - 1] ?? (s.rubrics[s.rubrics.length - 1]?.metrics?.holdout?.auc as number | undefined) ?? null;
+  const done = reached(last, target, down);
+  const rub = s.rubrics[s.rubrics.length - 1];
+  const rubLines = String(rub?.change_summary ?? "").split(/;\s*|,\s*(?=[+\-−~])/).map((x) => x.trim()).filter((x) => /^[+\-−~]/.test(x));
+  const PROBLEMS = ["overfit_segment", "regression", "skipped_checkpoint", "invalid_rubric", "corrupt_write"];
+  const fails = s.failures.filter((f) => sales ? PROBLEMS.includes(fclass(f)) : true);
+  const lastFail = fails[fails.length - 1];
+  // The trial change (has probation) is the story; a rollback's restore version is its consequence, shown in box 4.
+  const mine = [...curCfgs].reverse().filter((c) => c.change && t(c.created_at) >= t(o.created_at));
+  const change = mine.find((c) => c.probation) ?? mine[0];
+  const d = change ? fragDiff(change.change) : null;
+  const tap = change?.reason?.kind === "tap" ? s.taps.find((x) => x._id === change.reason.id) : null;
+  const trig = tap ? s.failures.find((f) => f._id === tap.trigger?.id) : null;
+  const why = trig ? problemName(fclass(trig)) : /^(\w[\w-]*)/.exec(String(change?.reason?.summary ?? ""))?.[1];
+  const since = change?.probation ? s.checkpoints.filter((x) => x.seq > change.probation.started_seq).length : 0;
+  const req = change?.probation?.checkpoints_required ?? 0;
+  const verdict = change?.outcome?.verdict as string | undefined;
+  const wm = /v\d+:\s*(\d+)\s+([\w-]+)\s+in\s+(\d+)[^→]*→\s*v\d+:\s*(\d+)\s+in\s+(\d+)/.exec(String(change?.outcome?.why ?? ""));
+  const watch = change?.probation?.watch_class ? problemName(change.probation.watch_class) : wm ? problemName(wm[2]) : "the problem";
+  const active = verdict ? 4 : change ? 3 : lastFail ? 2 : 1;
+  return (
+    <div className="story">
+      <div className={`sbox ${active === 1 ? "hot" : ""}`}>
+        <div className="snum">1 · THE WORK</div>
+        <div className="stext">
+          {sales ? "The agent is improving a deal-scoring rubric." : `The agent is working on: ${one(o.objective)}`}
+        </div>
+        <div className="sbig">
+          {scoreLabel(primary)}: <b className="bad">{fmtB(first, unit)}</b> → <b className={done ? "good" : ""}>{fmtB(last, unit)}</b>
+          <span className="sgoal"> (goal {down ? "≤" : "≥"} {fmtB(target, unit)} — locked)</span>
+        </div>
+        {rubLines.length > 0 && <div className="ssub">Just changed: {rubLines.slice(0, 2).map(ruleInWords).join("; ")}.</div>}
+      </div>
+      <div className="sarrow">↓</div>
+      <div className={`sbox ${active === 2 ? "hot" : ""} ${lastFail ? "warnbox" : ""}`}>
+        <div className="snum">2 · WHAT WENT WRONG</div>
+        <div className="stext">{lastFail ? problemInWords(lastFail, s, primary, unit) : "Nothing so far."}</div>
+        {lastFail && <div className="ssub">{ago(t(lastFail.created_at), now)} · {fails.length} problem{fails.length === 1 ? "" : "s"} this run</div>}
+      </div>
+      <div className="sarrow">↓</div>
+      <div className={`sbox ${active === 3 ? "hot" : ""} ${change ? "selfbox" : ""}`}>
+        <div className="snum">3 · WHAT THE HARNESS CHANGED ABOUT ITSELF</div>
+        {change && d ? (
+          <>
+            <div className="stext">
+              {d.add.length > 0 && <>It added one instruction to its own playbook: <q>{play(d.add[0])}</q></>}
+              {d.add.length === 0 && d.del.length > 0 && <>It removed an instruction from its playbook: <q>{play(d.del[0])}</q></>}
+              {d.other && <>It changed one setting: {d.other}</>}
+            </div>
+            <div className="ssub">
+              {why ? `Because of ${why}. ` : ""}
+              {change.probation && !verdict ? `On trial: ${Math.min(since, req)} of ${req} save points checked.` : ""}
+            </div>
+          </>
+        ) : (
+          <div className="stext">Nothing yet — it's running its starting playbook.</div>
+        )}
+      </div>
+      <div className="sarrow">↓</div>
+      <div className={`sbox ${active === 4 ? "hot" : ""} ${verdict === "kept" ? "okbox" : verdict ? "badbox" : ""}`}>
+        <div className="snum">4 · DID IT WORK?</div>
+        {verdict ? (
+          <div className="stext">
+            {wm ? (
+              <>
+                {watch[0].toUpperCase() + watch.slice(1)}: <b className="bad">{wm[1]}</b> in {wm[3]} save points before → <b className={Number(wm[4]) === 0 ? "good" : "bad"}>{wm[4]}</b> in the next {wm[5]}.{" "}
+              </>
+            ) : null}
+            {verdict === "kept" ? <b className="good">Change kept.</b> : <b className="bad">Didn&apos;t help — change automatically undone.</b>}
+          </div>
+        ) : change?.probation ? (
+          <div className="stext">Too early to tell — on trial ({Math.min(since, req)} of {req}). It is kept only if the score holds and {watch} don&apos;t come back.</div>
+        ) : (
+          <div className="stext">No changes to judge yet.</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ---------- page ----------
 export default function Page() {
   const params = useParams();
@@ -814,7 +956,8 @@ export default function Page() {
     ["events", s.events.length],
     ["resumes", s.resumes.length],
   ];
-  const cfgCards = [...s.harness_config].reverse().slice(0, present ? 2 : 20);
+  const objStart = t(o?.created_at);
+  const cfgCards = [...s.harness_config].filter((c, i, arr) => t(c.created_at) >= objStart || !arr.slice(i + 1).some((n) => t(n.created_at) <= objStart)).reverse().slice(0, present ? 2 : 20);
 
   const testsFrom = hero.first;
   const cmp = (label: string, by: Map<number, number>) => {
@@ -872,18 +1015,13 @@ export default function Page() {
             <div className="row wrap">
               {endState ? (
                 <span className="badge end">
-                  🔒 END STATE · {pretty(endState.bearing)} {down ? "≤" : "≥"} {fmtB(endState.target, unit)} · IMMUTABLE
+                  🔒 GOAL (locked): {scoreLabel(endState.bearing)} {down ? "≤" : "≥"} {fmtB(endState.target, unit)}
                 </span>
               ) : (
-                <span className="badge">end state: not set</span>
+                <span className="badge">goal: not set</span>
               )}
-              {cfg && (
-                <span className="badge" style={{ borderColor: vcol(cfg.version), color: vcol(cfg.version) }}>
-                  running settings v{cfg.version} · {cfg.status}
-                </span>
-              )}
-              {alive !== null && !params.fixture && <span className={`badge ${alive ? "alive" : "dead"}`}>{alive ? "harness ● running" : "harness ✖ down"}</span>}
-              {params.fixture && alive !== null && <span className={`badge ${alive ? "alive" : "dead"}`}>{alive ? "harness ● running" : "harness ✖ down"}</span>}
+              {alive !== null && !params.fixture && <span className={`badge ${alive ? "alive" : "dead"}`}>{alive ? "agent ● running" : "agent ✖ down"}</span>}
+              {params.fixture && alive !== null && <span className={`badge ${alive ? "alive" : "dead"}`}>{alive ? "agent ● running" : "agent ✖ down"}</span>}
             </div>
           </>
         )}
@@ -898,9 +1036,9 @@ export default function Page() {
               <div className="banner b-idle">
                 <div className="bmain">
                   <div className="btitle">
-                    {lastCp ? `checkpoint #${lastCp.seq} · ${pretty(primary)} ${fmtB(bearingOf(lastCp, primary).current, unit)}` : "waiting for the first checkpoint"}
+                    {lastCp ? `save point #${lastCp.seq} · score ${fmtB(bearingOf(lastCp, primary).current, unit)}` : "starting up…"}
                   </div>
-                  <div className="bsub">{lastCp ? `next: ${one(lastCp.next_action)}` : ""}</div>
+                  <div className="bsub">{lastCp ? `next it will: ${one(lastCp.next_action)}` : ""}</div>
                 </div>
               </div>
             )}
@@ -908,6 +1046,10 @@ export default function Page() {
 
           {rp?.done && <ReplaySummary rp={rp} />}
 
+          <Story s={s} primary={primary} target={target} unit={unit} down={down} now={rdata ? curAt : now} curCfgs={s.harness_config} />
+
+          <details className="more" open={!present}>
+            <summary>details ▸ scores, route, scoring rules, playbook versions, raw Atlas documents, event log</summary>
           <section className="hero">
             <div className="tile">
               <div className="tlabel">{pretty(primary)}</div>
@@ -985,7 +1127,6 @@ export default function Page() {
               ))}
           </section>
 
-          {rdata && <Scrubber data={rdata} rep={rep} />}
           <footer className="proof">
             <span className={`conn ${status}`}>● Atlas · db waypoints</span>
             {counts.map(([k, v]) => (
@@ -994,6 +1135,8 @@ export default function Page() {
               </span>
             ))}
           </footer>
+          </details>
+          {rdata && <Scrubber data={rdata} rep={rep} />}
         </>
       )}
     </main>

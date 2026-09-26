@@ -53,9 +53,9 @@ export function fixture(start: number): { snapshot: Doc; steps: FxStep[] } {
   const tapId = id();
   const v2 = {
     _id: id(), version: 2, status: "probation",
-    settings: { ...v1.settings, prompt_fragments: ["read_policies_first", "verify_whole_suite"] },
-    parent_version: 1, change: { field: "prompt_fragments", from: ["read_policies_first"], to: ["read_policies_first", "verify_whole_suite"] },
-    reason: { kind: "tap", id: tapId, summary: "regression (risk 0.66): enable verify_whole_suite" },
+    settings: { ...v1.settings, prompt_fragments: ["read_policies_first", "one_change_per_iteration"] },
+    parent_version: 1, change: { field: "prompt_fragments", from: ["read_policies_first"], to: ["read_policies_first", "one_change_per_iteration"] },
+    reason: { kind: "tap", id: tapId, summary: "regression (risk 0.66): enable one_change_per_iteration" },
     probation: { checkpoints_required: 2, baseline_bearing: 8, watch_class: "regression", started_seq: 5 },
     outcome: null, created_by: "surgeon", created_at: at(27),
   };
