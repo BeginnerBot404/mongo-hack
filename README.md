@@ -20,4 +20,5 @@ bun run check
 - [ ] Submitted on Cerebral Valley by 5:00PM
 - [ ] All team members added
 - [ ] Demo shows only event work
+- [ ] Delete `team/` and the "Team" section of CLAUDE.md
 - [ ] Teammate confirmed for MongoDB.local 9/30
