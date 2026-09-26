@@ -170,7 +170,7 @@ function narrate(s: State, present: boolean, primary?: string, unit?: string): L
 }
 
 // ---------- data hooks ----------
-type Params = { present: boolean; objective: string | null; fixture: boolean; replay: boolean; speed: number; hours: number };
+type Params = { present: boolean; objective: string | null; fixture: boolean; replay: boolean; speed: number; hours: number; since?: string | null };
 
 // ---------- replay over real Atlas history ----------
 type RunSummary = { id: string; title: string; at: number; startVersion: number | null; endVersion: number | null; first: number | null; last: number | null; unit?: string; cps: number; failures: Record<string, number> };
@@ -215,13 +215,14 @@ function useParams() {
       fixture: q.get("demoFixture") === "1",
       replay: q.get("replay") === "1",
       speed: Math.max(1, Number(q.get("speed") ?? 20) || 20),
+      since: q.get("since"),
       hours: Math.max(0.1, Number(q.get("hours") ?? 12) || 12),
     });
   }, []);
   return p;
 }
 
-function useStream(objective: string | null, fx: boolean, ready: boolean, replay?: { speed: number; hours: number }) {
+function useStream(objective: string | null, fx: boolean, ready: boolean, replay?: { speed: number; hours: number; since: string | null }) {
   const [rp, setRp] = useState<ReplayInfo | null>(null);
   const [s, setS] = useState<State>(EMPTY);
   const [status, setStatus] = useState<"connecting" | "live" | "error">("connecting");
@@ -234,7 +235,7 @@ function useStream(objective: string | null, fx: boolean, ready: boolean, replay
       let timer: ReturnType<typeof setTimeout> | null = null;
       let stop = false;
       (async () => {
-        const h = await (await fetch(`/api/history?hours=${replay.hours}`, { cache: "no-store" })).json();
+        const h = await (await fetch(`/api/history?hours=${replay.hours}${replay.since ? `&since=${encodeURIComponent(replay.since)}` : ""}`, { cache: "no-store" })).json();
         if (stop) return;
         const { items, runs } = buildReplay(h);
         const info: ReplayInfo = { from: items[0]?.at ?? 0, to: items[items.length - 1]?.at ?? 0, speed: replay.speed, done: false, runs };
@@ -296,7 +297,7 @@ function useStream(objective: string | null, fx: boolean, ready: boolean, replay
     es.addEventListener("ping", () => setStatus("live"));
     es.addEventListener("error", () => setStatus("error"));
     return () => es.close();
-  }, [objective, fx, ready, replay?.speed, replay?.hours]);
+  }, [objective, fx, ready, replay?.speed, replay?.hours, replay?.since]);
   return { s, status, loaded, lastEventAt, fxAlive, rp };
 }
 
@@ -580,7 +581,7 @@ export default function Page() {
   const params = useParams();
   const [ready, setReady] = useState(false);
   useEffect(() => setReady(true), []);
-  const replayOpts = useMemo(() => (params.replay ? { speed: params.speed, hours: params.hours } : undefined), [params.replay, params.speed, params.hours]);
+  const replayOpts = useMemo(() => (params.replay ? { speed: params.speed, hours: params.hours, since: params.since ?? null } : undefined), [params.replay, params.speed, params.hours, params.since]);
   const { s, status, loaded, lastEventAt, fxAlive, rp } = useStream(params.objective, params.fixture, ready, replayOpts);
   const liveAlive = useAlive(ready && !params.fixture && !params.replay);
   const alive = params.fixture ? fxAlive : liveAlive;
@@ -642,7 +643,7 @@ export default function Page() {
   let crashed = false;
   if (o && o.status !== "completed") {
     if (alive === false && everAlive.current) crashed = true;
-    else if (alive === null && !params.fixture && now - lastWrite > 6000 && now - lastWrite < 120000 && lastCp && !reached(bearingOf(lastCp, primary).current, target, down)) crashed = true;
+    else if (alive === null && !params.fixture && !params.replay && now - lastWrite > 6000 && now - lastWrite < 120000 && lastCp && !reached(bearingOf(lastCp, primary).current, target, down)) crashed = true;
   }
   if (crashed && downSince.current === null) downSince.current = alive === false ? now : lastWrite;
   if (!crashed) downSince.current = null;
@@ -727,7 +728,9 @@ export default function Page() {
           <span className="brand">WAYPOINTS · flight recorder{params.fixture ? " · DEMO FIXTURE (not live)" : ""}</span>
           {rp ? (
             <span className="replaybar">
-              ⏵ REPLAY · {hhmm(rp.from)}–{hhmm(rp.to)} · {rp.speed}×{rp.done ? " · done" : ""}
+              ⏵ REPLAY · {hhmm(rp.from)}–{hhmm(rp.to)} · {rp.speed}×
+              {o && rp.runs.length > 1 ? ` · run ${rp.runs.findIndex((r) => r.id === o._id) + 1}/${rp.runs.length}` : ""}
+              {rp.done ? " · done" : ""}
             </span>
           ) : (
           <span className={`conn ${status}`}>
