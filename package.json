@@ -42,7 +42,10 @@
     "smoke:v2": "bun run scripts/smoke-v2.ts",
     "load:sales": "bun run scripts/load-sales.ts",
     "sales:ceiling": "bun run scripts/sales-ceiling.ts",
-    "sales:smoke": "bun run scripts/sales-smoke.ts"
+    "sales:smoke": "bun run scripts/sales-smoke.ts",
+    "view:atlas": "bun run src/views/atlas.ts",
+    "view:prompt": "bun run src/views/prompt.ts",
+    "view:rubric": "bun run src/views/rubric.ts"
   },
   "engines": {
     "bun": ">=1.4"
