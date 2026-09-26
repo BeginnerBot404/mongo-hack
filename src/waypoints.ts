@@ -123,6 +123,8 @@ export async function checkpoint(input: {
 }) {
   const objectiveId = toObjectId(input.objective_id);
   const now = new Date();
+  // Models sometimes send -1 for "no waypoint finished"; treat any negative index as omitted.
+  if (input.waypoint_done !== undefined && input.waypoint_done < 0) input = { ...input, waypoint_done: undefined };
   if (input.waypoint_done !== undefined) {
     // Validate before bumping the sequence so a bad call doesn't leave a gap in checkpoint numbers.
     const existing = await getObjective(objectiveId);
@@ -323,12 +325,12 @@ export async function logFailure(input: { objective_id: string; failure: string;
   const failureClass = normalizeClass(input.class);
   const now = new Date();
 
-  const [priorSameClass, lastCheckpoint] = await Promise.all([
-    col("failures").find({ objective_id: objectiveId, class: failureClass }, { projection: { _id: 1 } }).sort({ created_at: 1 }).toArray(),
-    col("checkpoints").findOne({ objective_id: objectiveId }, { sort: { seq: -1 } }),
-  ]);
-  const nextAction = (lastCheckpoint?.next_action as string | undefined) ?? "the next attempt";
+  const priorSameClass = await col("failures")
+    .find({ objective_id: objectiveId, class: failureClass }, { projection: { _id: 1 } })
+    .sort({ created_at: 1 })
+    .toArray();
   const occurrences = priorSameClass.length + 1;
+  const seen = input.failure.trim().replace(/\s+/g, " ");
 
   const postmortem = {
     what_happened: input.failure,
@@ -336,7 +338,7 @@ export async function logFailure(input: { objective_id: string; failure: string;
     class: failureClass,
     occurrences_of_class: occurrences,
     prior_failures_same_class: priorSameClass.map((f) => f._id),
-    suggested_policy: `Before ${lowerFirst(nextAction)}, check for ${failureClass}.`,
+    suggested_policy: `Before every fix, check the code for ${failureClass} bugs (seen ${occurrences}x, latest: "${seen.length > 90 ? seen.slice(0, 89) + "…" : seen}").`,
     is_recurring: occurrences >= 2,
   };
   const doc = {
@@ -363,10 +365,6 @@ export async function logFailure(input: { objective_id: string; failure: string;
   return { failure_id: doc._id, postmortem };
 }
 
-function lowerFirst(s: string): string {
-  const trimmed = s.trim().replace(/[.\s]+$/, "");
-  return trimmed.charAt(0).toLowerCase() + trimmed.slice(1);
-}
 
 // 7. adapt (deterministic gate: the failure class must have recurred, or the caller explicitly approves)
 export const ADAPT_MIN_OCCURRENCES = 2;
