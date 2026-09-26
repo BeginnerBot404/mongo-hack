@@ -1,6 +1,7 @@
 // Idempotent loader: data/b2b_sales.csv → waypoints.opportunities (upsert by row). Run: `bun run load:sales`.
 import { mongo } from "../src/clients";
 import { FEATURES, opportunities, parseSalesCsv } from "../src/sales/data";
+import { ensureSalesIndexes } from "../src/sales/tools";
 
 const rows = await parseSalesCsv();
 const coll = opportunities();
@@ -10,6 +11,7 @@ await coll.createIndex({ row: 1 }, { unique: true });
 await coll.createIndex({ split: 1, won: 1 });
 await coll.createIndex({ won: 1 });
 await coll.createIndex({ split: 1 });
+await ensureSalesIndexes();
 const count = (split: string, won?: boolean) => rows.filter((r) => r.split === split && (won === undefined || r.won === won)).length;
 console.log(
   `opportunities: ${rows.length} rows (${FEATURES.length} features), upserted ${res.upsertedCount}, modified ${res.modifiedCount}; ` +
