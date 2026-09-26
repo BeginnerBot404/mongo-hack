@@ -1,182 +1,159 @@
-# The Waypoints harness
+# Waypoints
 
-A self-modifying agent harness whose memory, settings and guardrails live in MongoDB Atlas. It can change its route, never its destination.
+A self-improving agent harness for long-running work. Its memory, playbook and guardrails live in MongoDB Atlas. It can change its route, never its destination.
 
 Built during the Harness Engineering & Model Wrangling Hackathon on 2026-09-26.
 
+## The use case: B2B deal qualification
+
+Sales teams qualify deals with checklists like BANT or MEDDIC, and nobody knows whether the checklist actually predicts wins. The Waypoints harness runs unattended and keeps improving a points-based **deal-scoring rubric**. A deterministic Atlas aggregation grades every proposal against **real Won/Lost outcomes on held-out deals** the agent never sees.
+
+- **Data:** 448 real B2B opportunities (227 Won / 221 Lost), 22 qualitative deal features. Hugging Face `markobo/B2B_Sales_data`, CC-BY-4.0, originally from Bohanec, Kljajić Borštnar & Robnik-Šikonja, "Explaining machine learning models in sales predictions", *Expert Systems with Applications* (2017). Used unmodified; see `data/README.md`.
+- **Split:** fixed, seeded, stratified 70/30 train/holdout. Holdout rows never leave `src/sales/tools.ts`; the agent sees only train stats and holdout metrics.
+- **End state (locked):** holdout AUC ≥ **0.89** (`T_AUC` in `src/sales/targets.ts`). That sits above the best simple rubric fit on train alone (0.881), so reaching it takes sustained iteration, and that's where overfitting and regressions actually happen.
+
 ## The problem
 
-- An agent's working state lives in its context window. A crash, `kill -9` or context reset wipes it, and the next session starts from zero.
-- A harness that "improves itself" usually means a model rewriting its own prompt. Nothing stops it drifting away from the goal, and nothing undoes a bad change.
-- Long runs fail quietly: a fix that breaks something that used to work looks like progress until someone reads the test output.
+- **Crashes lose everything.** An agent's working state lives in its context window. A `kill -9` or context reset wipes it.
+- **Agents repeat mistakes.** Here the classic one is overfitting: a rule on a segment with seven deals looks like progress on the training data and falls apart on the holdout.
+- **Self-modifying agents move the goalposts.** "Self-improving" usually means a model rewriting its own prompt. Nothing stops it drifting off the goal, and nothing undoes a bad change.
 
 ## Tracks
 
-- **Long Horizon Engineering.** The objective, an immutable end state, numeric bearings, waypoints and checkpoints live in Atlas. After a crash, `resume` rebuilds a bounded working state. A hard metric (the tracked bearing) drives everything: when it drops, the server itself logs a `regression` failure.
-- **Recursive Harnessing.** The harness's own settings (prompt fragments, required tools, sentinel threshold, model) are versioned documents in `harness_config`. A sentinel scores risk on every failure and checkpoint. When it taps, a separate surgeon role changes one setting through a deterministic gate, on probation, and the change is kept or rolled back automatically from the bearing.
+- **Long Horizon Engineering.** The objective, the immutable end state, bearings, waypoints and every save point live in Atlas. After a crash, `resume` rebuilds a bounded working state and the run picks up from the best rubric so far.
+- **Recursive Harnessing.** The harness's own playbook (prompt fragments, required tools, sentinel threshold, model) is a versioned document in `harness_config`. A sentinel scores risk on every failure; a separate surgeon role changes one setting through a deterministic gate, on a trial, and keeps or rolls it back from the metric.
 
 ## How it works
 
 ```mermaid
 flowchart LR
   subgraph H["Waypoints harness (LangGraph.js, demo/harness.ts)"]
-    A[agent loop<br/>prompt = base + fragments]
+    A[agent loop<br/>prompt = base + playbook fragments]
+    RT[rubric tools<br/>describe_data, segment_stats,<br/>propose_rubric]
   end
-  OR[OpenRouter<br/>harness models]
-  A -. LLM calls .-> OR
-  A <-- "MCP stdio" --> SA["Waypoints MCP server<br/>--role agent"]
+  LLM[OpenRouter GLM-5.3-Flash<br/>or GB10 local vLLM]
+  A -. LLM calls .-> LLM
+  A --> RT
+  A <-- "MCP stdio" --> SA["Waypoints MCP<br/>--role agent"]
   SA -- embed / rerank --> V[Voyage AI<br/>voyage-4 + rerank-2.5]
   subgraph Atlas["MongoDB Atlas (db: waypoints)"]
-    DB[(objectives, checkpoints,<br/>decisions, failures, memories,<br/>resumes, policies)]
+    DB[(objectives, checkpoints, decisions,<br/>failures, memories, policies, events)]
+    OP[(opportunities, rubrics)]
     HC[(harness_config<br/>$jsonSchema validator)]
     T[(taps)]
-    E[(events)]
   end
+  RT -- aggregation scoring --> OP
   SA <--> DB
   SA -- read --> HC
   DB -- change stream --> S[sentinel<br/>deterministic risk score]
-  S -. optional advisory .-> J[Jev on OpenRouter]
-  S -- writes --> T
-  S <-- "MCP stdio" --> SS["Waypoints MCP server<br/>--role surgeon<br/>deterministic gate"]
+  S --> T
+  S <-- "MCP stdio" --> SS["Waypoints MCP<br/>--role surgeon<br/>gate, trial, auto-rollback"]
   SS -- transaction --> HC
-  SS --> DB
-  Atlas -- change stream --> FR[flight recorder<br/>Next.js, SSE]
+  Atlas -- change streams --> VW[terminal views +<br/>flight recorder]
 ```
 
-1. The harness calls `resume`, then `get_settings`. Its system prompt is a fixed base prompt plus the text of the enabled fragments.
-2. After every test run it calls `checkpoint` with the pass count and the `settings_version` it is running. If the model skips that checkpoint, the harness writes it (`required_tools: ["checkpoint"]`).
-3. If the tracked bearing dropped since the previous checkpoint, the server inserts a `regression` failure, a memory and an `auto_failure` event.
-4. The sentinel sees the failure on a change stream, computes the risk score and, above the current threshold, decides an action. For a regression with `verify_whole_suite` off, it calls the surgeon's `apply_settings_change`, which creates a new `harness_config` version on probation.
-5. The next `checkpoint` or `resume` response carries `settings.reload: true` and the open tap. The harness calls `get_settings` again and rebuilds its prompt.
-6. On each later checkpoint the sentinel calls `evaluate_probation`. After 2 checkpoints the version is kept if the bearing is at or above its baseline and the watched class didn't recur. Otherwise it is rolled back in a transaction.
-7. The flight recorder streams all of this from Atlas change streams.
+- **Harness** (ours, LangGraph.js): owns the protocol in code, not in the model's goodwill.
+- **Waypoints MCP, agent role:** memory tools (`set_objective`, `checkpoint`, `resume`, `log_decision`, `log_failure`, `recall`, `get_settings`, `list_policies`). No tool writes settings.
+- **Rubric tools** (`src/sales/tools.ts`): the model calls `describe_data`, `segment_stats` and `propose_rubric`. Scoring is an Atlas aggregation that sums rule points per deal with `$sum`/`$cond`; AUC (Mann-Whitney), A-grade win rate and coverage are computed from its output.
+- **Sentinel** (`bun run sentinel`): watches failures and checkpoints on a change stream and scores risk with fixed weights.
+- **Surgeon role:** `apply_settings_change`, `rollback_settings`, `evaluate_probation`, `adapt`. Mounted only by the sentinel.
+- **Recall:** Voyage `voyage-4` embeddings, Atlas `$vectorSearch`, Voyage `rerank-2.5`.
+- **Model:** `z-ai/glm-5.3-flash` on OpenRouter. `DEMO_PROVIDER=gb10` uses a local vLLM (GB10) serving GLM, with OpenRouter as fallback.
 
-Every checkpoint, decision and failure is also stored in `memories` with a 1024-dim `voyage-4` embedding. `recall` runs `$vectorSearch` on `memories_vec` and reranks with `rerank-2.5`. If Voyage is unavailable (4s timeout, no retries, 60s pause after a 429), memories are stored without a vector and `recall` returns the most recent matches.
+## The loop in plain English
 
-## Key ideas
-
-- **Immutable end state.** `set_objective` writes `end_state: { description, bearing, target }` once. No tool updates it. `harness_config` can't express it either: the `$jsonSchema` validator sets `additionalProperties: false` at every level, and the gate only accepts the four settings fields. The harness can change its route, never its destination.
-- **Settings are versioned documents.** Each `harness_config` version changes exactly one field (`change: { field, from, to }`) and records its parent and reason. Inserting a version and superseding the previous one happen in one transaction. The current config is the highest version with status `active`, `probation` or `kept`.
-- **Probation, then kept or rolled back automatically.** A new version starts on probation with the last checkpoint's bearing as its baseline. `evaluate_probation` decides after 2 checkpoints. A rollback marks the version `rolled_back` and re-inserts the parent's settings as a new `active` version, so history is never rewritten.
-- **A fixed prompt-fragment library.** `src/fragments.ts` holds five fragments (`checkpoint_every_test`, `recall_before_edit`, `verify_whole_suite`, `one_change_per_edit`, `read_policies_first`). Settings select fragment ids. The model never writes its own prompt text.
-- **Role separation.** The harness mounts the agent role, which can read settings but has no tool that writes them. Settings and policy writes (`adapt`, `apply_settings_change`, `rollback_settings`, `evaluate_probation`) exist only on the surgeon role, which only the sentinel mounts. `docs/atlas-roles.md` describes an optional Atlas custom role that makes `harness_config` and `policies` read-only for the agent's DB user as a second wall. `bun run setup` does not create it.
-- **A deterministic risk score.** `risk = 0.4·similarity + 0.3·recurrence + 0.3·trend`, each component in 0..1:
-  - similarity: the best `$vectorSearch` score of the new failure against earlier failures on the objective (term-frequency cosine if the failure has no embedding)
-  - recurrence: `min(1, (count of class − 1) / 2)`
-  - trend: regression = 1, stall (bearing flat for 3 checkpoints) = 0.6, otherwise 0
-  The action is chosen in code. Jev (`typesafe/jev-router`) can be asked for advice with `SENTINEL_ADVISOR=jev`. Its answer is stored on the tap and never decides anything.
-- **Failures from the hard metric.** The agent can log failures itself, but it doesn't have to notice a regression: a drop in the tracked bearing makes the server log one.
-- **Policies from recurring failures.** When a class recurs and the tap isn't a settings change, the sentinel calls `adapt`. Its gate is also deterministic: at least 2 occurrences of the class, or `explicit_approval`.
-
-## Tools per role
-
-`bun run src/server.ts --role agent|surgeon` (default `agent`).
-
-Agent role (what the harness, or any MCP client, mounts):
-
-| Tool | What it does |
+| We say | In the code |
 |---|---|
-| `set_objective` | Goal, numeric bearings, ordered waypoints and the immutable `end_state` (default: the first bearing's target). |
-| `checkpoint` | Saves a state snapshot and bearing values. Returns `settings { current_version, reload }`, the latest open tap and `end_state`. Logs an automatic `regression` failure if the tracked bearing dropped. |
-| `resume` | Call first. Returns the objective, end state, bearings, current waypoint, last checkpoint, open threads, next action, last 3 decisions, last 3 failures with postmortems, active policies, `previous_agent`, settings status and any open tap. |
-| `log_decision` | Appends to the decision ledger. |
-| `log_failure` | Records a typed failure and returns a deterministic postmortem (occurrence count, prior failures, suggested policy). |
-| `recall` | Semantic search over checkpoints, decisions and failures. Writes a `recall` event. |
-| `get_settings` | Current version, status, settings and the enabled fragments' `{ id, title, text }`. |
-| `list_policies` | Active (or superseded / all) policies. |
+| score | bearing (`holdout_auc`, `a_grade_win_rate`) |
+| save point | checkpoint |
+| playbook | `harness_config` (one version per change) |
+| alert | tap |
+| trial | probation |
 
-Surgeon role (mounted only by the sentinel):
+1. On start the harness calls `resume`, then `get_settings`. Its system prompt is the sales base prompt plus the text of the playbook's enabled fragments.
+2. The model explores train-only stats and proposes a rubric. The Atlas scorer grades it on train and holdout.
+3. The harness saves a checkpoint after every proposal, stamping the scores from the **holdout** metrics, never the model's claim. If the model moves on without one, the harness writes it and logs `skipped_checkpoint`.
+4. The harness logs `overfit_segment` (gap > 0.08, or any rule on a value with < 15 train deals) and `invalid_rubric` itself. If holdout AUC drops by ≥ 0.005, the server logs a `regression` on its own.
+5. The sentinel scores each failure: `risk = 0.4·similarity + 0.3·recurrence + 0.3·trend`. Similarity is the best `$vectorSearch` match against earlier failures; recurrence is `min(1, (count − 1) / 2)`; trend is 1 for a regression, 0.6 for a stall. Harness-detected protocol failures score full trend.
+6. Above the playbook's threshold (seed 0.25) it raises an alert and the surgeon enables one fragment as a new playbook version on trial.
+7. The next checkpoint tells the harness to reload; it rebuilds its prompt mid-run.
+8. After 2 checkpoints the sentinel judges the trial: kept if the score held at or above its baseline and the failure didn't recur, otherwise rolled back automatically. The verdict records before/after counts, e.g. `v1: 3 overfit-segment in 6 checkpoints → v2: 0 in 2`.
+9. A fresh run starts from the best rubric learned in earlier runs. History carries over.
 
-| Tool | What it does |
-|---|---|
-| `adapt` | Promotes a failure's suggested policy to a versioned policy if the gate passes. |
-| `apply_settings_change` | Changes one setting through the gate. Refused while another version is on probation, or if the value is unchanged or not in the enums. |
-| `rollback_settings` | Rolls back the current version and re-activates its parent's settings as a new version. |
-| `evaluate_probation` | Keeps or rolls back the version on probation. |
+## Failure classes and playbook fixes
 
-## Collections
+From `SALES_FIX_FOR` in `src/sentinel.ts`:
 
-One database (`WAYPOINTS_DB`, default `waypoints`). `bun run setup` creates collections, indexes, the `memories_vec` vector index and the `harness_config` validator, and seeds settings v1.
+| Failure class | Logged by | Fragment the surgeon enables (on trial) |
+|---|---|---|
+| `overfit-segment` | harness | `min_support_15`: only add a rule for a value with at least 15 train deals |
+| `regression` | server | `one_change_per_iteration`: change exactly one rule per proposal |
+| `skipped-checkpoint` | harness | `checkpoint_every_eval`: checkpoint right after every `propose_rubric` |
+| `invalid-rubric` | harness | `check_schema_first`: call `describe_data` first; use only listed fields and values |
 
-- `objectives`: goal, immutable `end_state`, bearings, waypoints, status, `last_agent`.
-- `checkpoints`: state snapshot per `seq`, with a bearings snapshot.
-- `decisions`: append-only decision ledger.
-- `failures`: typed failures with postmortems (`auto: true` when the server logged a regression).
-- `memories`: embedded text of every checkpoint, decision and failure.
-- `resumes`: one document per `resume` call (who resumed, from which checkpoint, previous agent).
-- `policies`: versioned rules adopted from recurring failures, with the gate result.
-- `harness_config`: one document per settings version, validated by `$jsonSchema`.
-- `taps`: every sentinel score (risk, components, weights, trigger, advisor, deterministic decision). Below-threshold scores are recorded but never delivered.
-- `events`: plain-English narration for the flight recorder (`recall`, `settings_reload`, `tap_acknowledged`, `probation_verdict`, `auto_failure`).
+If the class recurs and no settings change applies, the sentinel calls `adapt` to promote a policy (gate: at least 2 occurrences).
 
-Example `harness_config` document after a regression tap (shape from `src/settings.ts`, values illustrative):
+## Safety
 
-```js
-{
-  _id: ObjectId("..."),
-  version: 2,
-  status: "probation",                  // later "kept", or "rolled_back" plus a new "active" v3
-  settings: {
-    prompt_fragments: ["checkpoint_every_test", "read_policies_first", "verify_whole_suite"],
-    required_tools: ["checkpoint"],
-    sentinel_threshold: 0.25,
-    model: "anthropic/claude-sonnet-5"
-  },
-  parent_version: 1,
-  change: { field: "prompt_fragments",
-            from: ["checkpoint_every_test", "read_policies_first"],
-            to: ["checkpoint_every_test", "read_policies_first", "verify_whole_suite"] },
-  reason: { kind: "tap", id: ObjectId("..."), summary: "Regression (risk ...): verify the whole suite after each fix" },
-  probation: { checkpoints_required: 2, baseline_bearing: 8, watch_class: "regression", started_seq: 5 },
-  outcome: null,                        // { decided_at, verdict: "kept" | "rolled_back", why }
-  created_by: "surgeon",
-  created_at: ISODate("2026-09-26T...")
-}
-```
+- **Immutable end state.** Written once by `set_objective`. No tool updates it.
+- **Fixed fragment library.** `src/fragments.ts` holds the only prompt text. The playbook selects fragment ids; the model never writes its own prompt.
+- **`$jsonSchema` validator on `harness_config`.** `settings` allows exactly four fields (`prompt_fragments`, `required_tools`, `sentinel_threshold`, `model`), fragment ids and models are enums, and there is nowhere to put a goal.
+- **One change at a time.** Each version changes one field. While a version is on trial, further fixes are queued.
+- **Trial with automatic rollback.** A rollback marks the version `rolled_back` and re-inserts the parent's settings as a new `active` version, in a multi-document transaction. Nothing is deleted.
+- **Role separation.** The harness mounts the agent role, which can read settings but not write them. Only the sentinel mounts the surgeon role. `docs/atlas-roles.md` describes an optional Atlas custom role as a second wall (not created by `bun run setup`).
+- **Deterministic decisions.** Weights and actions are chosen in code and stored on every tap. The optional Jev advisor (`SENTINEL_ADVISOR=jev`) is recorded, never decides.
 
-## Long horizon, honestly
+## MongoDB Atlas features used
 
-We can't show billions of tokens in a one-day hackathon, and we don't claim to. What the design does instead:
+- **Documents** for all state: objectives, checkpoints, decisions, failures, memories, resumes, policies, taps, events, playbook versions, deals and rubrics.
+- **Aggregation pipeline** as the rubric scorer, plus the train-only stats behind `describe_data` and `segment_stats`.
+- **Atlas Vector Search** (`$vectorSearch`) over Voyage `voyage-4` embeddings, reranked with `rerank-2.5`, for `recall` and the sentinel's similarity score.
+- **`$jsonSchema` validation** on `harness_config`.
+- **Multi-document transactions** for playbook version switches and rollbacks.
+- **Change streams** driving the sentinel, the flight recorder and the terminal views.
 
-- **The agent's working context stays bounded.** `resume` returns the latest checkpoint, the last 3 decisions, the last 3 failures and the active policies (at most one per failure class), whatever the length of the history. A session restarted after checkpoint 5 or checkpoint 5,000 starts from a payload of the same shape.
-- **Atlas holds the unbounded history.** Every checkpoint, decision, failure, resume, tap and settings version is kept as a document.
-- **Recall retrieves on demand.** Older context comes back through `recall` (vector search plus rerank) only when the agent or a tap asks for it.
-- **Bearings and the sentinel keep the run pointed at the end state.** The tracked bearing is checked at every checkpoint, a drop becomes a failure automatically, and the sentinel reacts to regressions and stalls without the agent having to notice them.
+## Views
 
-The demo shows the mechanism on a short task: a hard kill, a resume from Atlas, and a settings change judged by the metric.
+**Terminal glass box:** `bun run demo:layout` (herdr; `bun run demo:layout:tmux` for tmux). Four panes:
+- harness, with the launch command pre-typed
+- `view:prompt`: the exact system prompt the harness is running, with a diff when the playbook changes
+- `view:rubric`: the latest rubric and holdout metrics, with a diff per version
+- `view:atlas`: the raw Atlas change stream across collections
 
-## Demo
+The sentinel runs in a second tab.
 
-The fixture (`demo/fixture/`) is a small invoice module with 10 tests, a few planted bugs and one trap: the obvious fix to a helper breaks a test that was passing. The end state is `tests_passing` = 10. See `demo/README.md` for the current flags.
-
-```sh
-bun run demo:clean                 # wipe Waypoints documents, reset harness_config to seed v1, restore the fixture
-bun run setup                      # collections, indexes, validator, seed (idempotent)
-bun run sentinel                   # second pane: change streams, risk scores, taps
-cd flight-recorder && bun run dev  # third pane: http://localhost:3100 (or `bun run watch` in the terminal)
-bun run harness --fresh            # new objective; kill -9 it mid-task (or use --die-after N)
-bun run harness                    # resumes from the last checkpoint and finishes
-```
-
-What to look for: `◎ END STATE` at start, the resume after `kill -9`, `▼ BEARING DROP` when the trap fix lands, `▲ TAP risk … → adjust_settings`, `⟳ SETTINGS v1 → v2 (probation): +verify_whole_suite`, the probation verdict in the sentinel pane and flight recorder, and `✔ all green`.
+**Flight recorder** (`flight-recorder/`, Next.js on http://localhost:3100): a plain-English story view of the latest objective (end state, scores, alerts, playbook changes and verdicts), live from a change stream. `?replay=1&speed=20` replays real Atlas history with a scrubber.
 
 ## Run it yourself
 
-Prerequisites: bun ≥ 1.4 (bson crashes on import under bun 1.3.x), a MongoDB Atlas cluster (we used the Atlas Hackathon Sandbox), a Voyage AI key and an OpenRouter key.
+Prerequisites: bun ≥ 1.4, a MongoDB Atlas cluster, a Voyage AI key and an OpenRouter key.
 
 ```sh
 bun install
-cp .env.example .env   # fill in MONGODB_URI, VOYAGE_API_KEY, OPENROUTER_API_KEY
-bun run check          # smoke-tests MongoDB, OpenRouter and Voyage credentials
-bun run setup          # collections, indexes, memories_vec, harness_config validator + seed v1
-bun run smoke          # exercises the tools against Atlas
+cp .env.example .env     # MONGODB_URI, VOYAGE_API_KEY, OPENROUTER_API_KEY
+bun run check            # smoke-tests the credentials
+bun run setup            # collections, indexes, vector index, validator, seed playbook v1
+bun run load:sales       # load the deals into waypoints.opportunities (idempotent)
+bun run sentinel         # second pane
+cd flight-recorder && bun install && ln -sf ../.env .env.local && bun run dev   # optional
 ```
 
-Flight recorder: `cd flight-recorder && bun install && ln -sf ../.env .env.local && bun run dev`.
+Then:
+
+```sh
+bun run harness --fresh --die-after-checkpoint 3   # new objective; kills itself mid-task after checkpoint 3
+bun run harness                                    # resumes from Atlas and iterates toward the end state
+```
+
+- Flags: `--fresh` (new objective), `--die-after-checkpoint N`, `--die-after N` (tool calls), `--max-steps N` (default 15 proposals), `--task sales|invoice`.
+- `DEMO_PROVIDER` empty uses OpenRouter GLM; `DEMO_PROVIDER=gb10` uses `GB10_BASE_URL`, `GB10_MODEL`, `GB10_API_KEY`. `DEMO_MODEL=<slug>` overrides.
+- `bun run demo:clean` archives the open objective and keeps history; `--hard` wipes everything and reseeds playbook v1.
+
+Seed playbook v1: fragments `["read_policies_first"]`, required tools `["checkpoint"]`, threshold 0.25, model `z-ai/glm-5.3-flash`.
 
 ### Using Waypoints from Claude Code or any MCP client
 
-Mount the agent role. Your client gets the same memory, end state and settings the harness uses, without any settings-writing tools.
+Mount the agent role to get the same memory, end state and playbook the harness uses, without any settings-writing tools.
 
 ```sh
 claude mcp add waypoints -- bun --cwd /abs/path/to/mongo-hack run src/server.ts --role agent
@@ -194,23 +171,22 @@ claude mcp add waypoints -- bun --cwd /abs/path/to/mongo-hack run src/server.ts 
 }
 ```
 
-Bun loads `.env` from the working directory. If your client has no `cwd` option, pass `MONGODB_URI`, `VOYAGE_API_KEY` and, optionally, `WAYPOINTS_DB` through its `env` block.
+Bun loads `.env` from the working directory. Without a `cwd` option, pass `MONGODB_URI`, `VOYAGE_API_KEY` and optionally `WAYPOINTS_DB` through `env`.
 
-## Built with
+## Long horizon, honestly
 
-- **MongoDB Atlas**: all state, `$jsonSchema` validation, multi-document transactions, change streams (sentinel and flight recorder) and Atlas Vector Search
-- **Voyage AI**: `voyage-4` embeddings and `rerank-2.5`
-- **OpenRouter**: harness models (Claude Sonnet 5 by default, with a fallback) and the optional Jev advisor
-- **LangGraph.js** with `@langchain/mcp-adapters` and `@langchain/openai`: the harness loop
-- **MCP TypeScript SDK** (`@modelcontextprotocol/sdk`): the server and the sentinel's surgeon client
-- **Next.js**: the flight recorder
-- zod, bun, TypeScript
+We didn't run billions of tokens in a one-day hackathon, and we don't claim to.
 
-Third-party components we did not write: LangGraph.js and the other SDKs and libraries in `package.json` and `flight-recorder/package.json`, and the official documentation snapshots in `docs/refs/`. Hermes Agent (Nous Research) was used in an earlier version of the demo. Its config and launch script remain in `demo/hermes/`, but it is not part of the product or the demo.
+- **The working context stays bounded.** `resume` returns the latest checkpoint, the last 3 decisions, the last 3 failures and the active policies, whatever the history length. A restart after checkpoint 5 or 5,000 gets a payload of the same shape.
+- **Atlas holds the unbounded history.** Every checkpoint, decision, failure, resume, alert, rubric and playbook version is kept.
+- **Recall retrieves on demand** through vector search plus rerank.
+- **Scores and the sentinel keep the run pointed at the end state** without the agent having to notice its own regressions.
 
 ## Built at the hackathon
 
-All code in this repo was written on 2026-09-26 during the event. The first commit is at 10:37 ET, and the git history is the record.
+All code in this repo was written on 2026-09-26 during the event. The first commit is at 10:37 ET; the git history is the record.
+
+Third-party components we did not write: LangGraph.js, the MCP SDK and the other libraries in `package.json` and `flight-recorder/package.json`, the dataset (see attribution above), and the documentation snapshots in `docs/refs/`. Hermes Agent (Nous Research) was used in an early version of the demo; its config remains unused in `demo/hermes/`. The original invoice-fixing task remains as `--task invoice` (`bun run harness:invoice`).
 
 ## Submission checklist (internal)
 
@@ -218,6 +194,5 @@ All code in this repo was written on 2026-09-26 during the event. The first comm
 - [ ] Repo is public
 - [ ] 1-min demo video recorded, and the link works in a private window
 - [ ] Submitted on Cerebral Valley by 5:00PM
-- [ ] All team members added
 - [ ] Demo shows only event work
 - [ ] Teammate confirmed for MongoDB.local 9/30

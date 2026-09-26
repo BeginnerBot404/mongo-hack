@@ -1,73 +1,59 @@
-# Waypoints harness: build plan, v2 (2026-09-26)
+# Waypoints: final plan (2026-09-26, sales direction)
 
-Source of truth: `docs/CONTRACT.md`. Code freeze **15:45**. Video **15:15–15:45**. Submit on Cerebral Valley **by 16:15** (portal closes 17:00; the rest is buffer). Judging is a 3-minute live demo followed by 2 minutes of Q&A.
+Task: B2B deal-qualification rubric (`docs/SALES-PACK.md`), end state holdout AUC ≥ 0.89, locked. Judging is a 3-minute live demo plus 2 minutes of Q&A.
 
 ## Timeline
-| By | Milestone | Owner | Gate |
-|---|---|---|---|
-| 14:30 | Helper sub-graph in or cut | Claude (harness) | cut at 14:30 if not working |
-| 14:45 | Flight recorder shows live data (timeline, risk meter, bearings + end state, event stream) | Claude (flight recorder) | if not, use `bun run watch` as the view |
-| 15:00 | Full demo run end to end twice: kill → resume → trap → regression → tap → probation → kept → 10/10 | Claude + Ryan | fix only what breaks the run |
-| 15:15 | README and PLAN match the code; rehearsal done | Claude drafts, Ryan edits | |
-| 15:15–15:45 | Record the 1-min video (screen + voiceover), upload unlisted, check the link in a private window | Ryan | |
-| 15:45 | **Freeze.** No code changes after this. | everyone | |
-| 16:15 | Submit on Cerebral Valley (repo, video, description), all teammates added | Ryan | buffer until 17:00 |
+| By | Milestone | Gate |
+|---|---|---|
+| now–16:10 | History runs finish in Atlas; README/PLAN match the code; one rehearsal of the beats below | fix only what breaks the demo |
+| 16:10 | **Freeze.** No code changes after this. | |
+| 16:10–16:40 | Record the 1-min video (script in SUBMISSION.md), upload unlisted, check the link in a private window | |
+| 16:50 | **Submit** on Cerebral Valley (repo, video, description) | portal closes 17:00 |
+| 17:15 | Judging | |
 
 ## Demo (3 minutes)
-Panes: harness, sentinel, flight recorder (or `bun run watch`).
+Setup before walking up: `bun run demo:layout` (harness pane with the command pre-typed, `view:prompt`, `view:rubric`, `view:atlas`; sentinel running in its tab). Flight recorder at http://localhost:3100/?replay=1&speed=20, paused. Backup: the recorded video.
 
-1. **(20s) Problem.** Long agent runs lose their state on a crash, and "self-improving" harnesses let the model rewrite its own goal. The Waypoints harness keeps its memory, settings and guardrails in Atlas. It can change its route, never its destination.
-2. **(40s) Kill and resume.**
-   - `bun run harness --fresh`: `◎ END STATE` (10/10 tests, immutable), checkpoints after each test run.
-   - `kill -9` mid-task.
-   - `bun run harness`: `resume` rebuilds the objective, bearing, open threads and next action from Atlas, and the run continues.
-3. **(60s) The trap and the tap.**
-   - The obvious fix lands: `▼ BEARING DROP 9 → 8`. The server logs a `regression` failure on its own.
-   - The sentinel scores it (similarity, recurrence, trend) and taps: `▲ TAP risk … → adjust_settings`.
-   - The surgeon enables `verify_whole_suite` as settings v2 on probation. The flight recorder shows the diff card.
-   - The harness reloads: `⟳ SETTINGS v1 → v2 (probation): +verify_whole_suite`.
-4. **(40s) Probation.** The bearing recovers. After 2 checkpoints the sentinel keeps v2 (or rolls it back automatically). Show the verdict event and the `harness_config` versions in Atlas. The run reaches `✔ all green`, 10/10.
-5. **(20s) Why it matters.** Every change is one field, versioned, gated in code, judged by the metric and reversible. Any MCP client can mount the agent role (optional 15s: Claude Code calling `resume`).
+1. **(0:00–0:20) Problem.** Sales teams qualify deals with checklists nobody validates. An agent could tune one overnight, but left alone agents overfit, crash and lose state, or quietly move the goal.
+2. **(0:20–1:10) What happened this afternoon (replay).** Unpause the flight recorder.
+   - 448 real deals, public CC-BY dataset. The agent writes a points rubric; an Atlas aggregation grades it on holdout deals it never sees.
+   - End state holdout AUC ≥ 0.89, set once, never editable.
+   - Point at the score line climbing, the `overfit-segment` failure, the alert with its risk components, the playbook change (`+min_support_15` on trial) and the verdict with before/after counts.
+3. **(1:10–2:10) Live: crash and resume.**
+   - Run the pre-typed `bun run harness --fresh --die-after-checkpoint 3`. Point at `◎ END STATE`, proposals landing in `view:rubric`, inserts streaming in `view:atlas`.
+   - It kills itself after checkpoint 3 (or `kill -9` by hand). "Everything in its context window is gone."
+   - `bun run harness`: `resume` hands back a bounded working state; it continues from the best rubric.
+   - If the sentinel alerts live, point at `view:prompt`: the system prompt changes mid-run, one fragment, from the fixed library.
+4. **(2:10–2:50) Why it's safe.** Three walls: the end state no tool can edit; a `$jsonSchema` validator that allows only four settings fields; the agent has no settings-writing tools, only the sentinel's surgeon does. Trials roll back automatically, in a transaction. Nothing is deleted.
+5. **(2:50–3:00) Close.** "Memory, playbook and guardrails in Atlas. It gets better on a long task without moving the goalposts. It can change its route, never its destination."
 
-## Q&A prep (Ryan)
-- **What stops the agent rewriting its goal?**
-  - The end state is written once by `set_objective`, and no tool updates it.
-  - The agent role has no settings-writing tools; only the sentinel mounts the surgeon role.
-  - `harness_config` can't hold an end state: the `$jsonSchema` validator allows only the four settings fields, and the gate only accepts those four.
-  - The prompt comes from a fixed fragment library; the model never writes prompt text.
-- **What if the sentinel is wrong?**
-  - Every change starts on probation with a bearing baseline.
-  - After 2 checkpoints it's kept only if the bearing held and the watched failure class didn't recur. Otherwise it's rolled back automatically, in a transaction.
-  - Only one version can be on probation at a time, and nothing is deleted: the rolled-back version stays in history.
-- **Why deterministic?**
-  - The score is a fixed weighted sum (0.4 similarity, 0.3 recurrence, 0.3 trend) and the action is chosen in code, so every tap can be explained from the stored components.
-  - Jev is advisory only: its answer is recorded on the tap and never decides.
-  - Reproducible in a demo and auditable afterwards.
-- **Isn't this RAG?**
-  - `recall` is one tool out of eight on the agent role.
-  - The core is state reconstruction after a crash, a hard metric that logs its own failures, and gated, versioned self-modification with automatic rollback.
-- **Billions of tokens?**
-  - We didn't run billions of tokens today, and we don't claim to.
-  - The agent's working context stays bounded: `resume` returns the latest checkpoint, the last 3 decisions and failures and the active policies, whatever the history length.
-  - Atlas holds the unbounded history, `recall` fetches it on demand, and bearings plus the sentinel keep the run pointed at the end state.
-- **Why Atlas?**
-  - Documents, vector search, schema validation, transactions and change streams in one store. The sentinel and flight recorder are both driven by change streams.
+**If the live run fails:** "Let me show the recording." Don't debug on stage.
+
+## Q&A prep (answers ≤ 25 words)
+- **Isn't this just RAG?** No. Recall is one tool of eight. The core is crash recovery, a hard metric that logs its own failures, and gated self-modification with rollback.
+- **Billions of tokens?** We didn't run billions today and don't claim to. Resume returns the same bounded payload at checkpoint 5 or 5,000. Atlas holds everything else.
+- **What stops it rewriting its goal?** End state is written once, no tool edits it. The validator only allows four settings fields. The agent has no settings-writing tools at all.
+- **What if the sentinel is wrong?** Every change runs on trial. After two checkpoints it's kept only if the score held and the failure didn't recur. Otherwise it rolls back automatically.
+- **Why deterministic?** Every alert is explainable from stored components: fixed weights, action chosen in code. Reproducible on stage, auditable afterward. The LLM never decides its own guardrails.
+- **Why not AutoML or logistic regression?** You could, and it'd probably match the AUC. The rubric is the test task. The product is the harness that improves safely on any metric.
+- **Is 448 deals enough?** It's small, which is the point: overfitting is real. Fixed holdout the agent never sees, minimum 15-deal support per rule, gap flag over 0.08.
+- **Why Atlas?** Documents, vector search, aggregation scoring, schema validation, transactions and change streams in one place. The sentinel, flight recorder and terminal views all run on change streams.
+- **How does this generalize?** Any long task with a hard metric. We started on a code-fixing task (still `--task invoice`); the sales task reused the same roles, gate and sentinel.
+- **Built today vs. used?** All code written today, from 10:37. We used LangGraph.js, the MCP SDK, Next.js, Voyage, OpenRouter and a public CC-BY dataset.
+- **Why GLM / OpenRouter?** GLM Flash is fast and cheap for many iterations. The model is one gated playbook setting; GB10 runs GLM locally for background history runs.
+- **More time?** Call-transcript signals, the sentinel on Atlas Stream Processing, multi-day runs, an Atlas custom role locking settings for the agent's DB user.
 
 ## Cut order (first cut first)
-1. GB10 as primary
-2. Helper sub-graph (cut at 14:30)
-3. Jev
-4. The Claude Code moment
-5. Flight-recorder extras
-6. Tool-level enforcement beyond prompt fragments
+1. GB10 anything on stage (OpenRouter GLM only)
+2. Jev advisor
+3. The Claude Code moment
+4. Flight-recorder extras beyond the story view and replay
+5. Live sentinel alert (show it in the replay instead)
 
-**Never cut:** kill → resume, sentinel score → tap, a gated settings change with automatic rollback, the timeline (or the watch pane), video time.
+**Never cut:** kill → resume, the replay showing alert → trial → verdict, the immutable end state, video time.
 
 ## Risks and fallbacks
-- **Model skips checkpoints:** the harness writes the checkpoint itself (`required_tools`). Sonnet 5 is pinned over GLM after rehearsal.
-- **Voyage rate-limited:** memories are stored without a vector, recall falls back to most recent, and the sentinel's similarity falls back to term overlap.
-- **Flight recorder not live:** `bun run watch`.
-- **Live demo fails in the room:** play the recorded video.
-
-## Orchestration
-Claude orchestrates; subagents own separate paths (server `src/`, harness `demo/`, flight recorder `flight-recorder/`). Commit small; the orchestrator pushes.
+- **Model skips checkpoints:** the harness writes them itself and logs `skipped-checkpoint`; the sentinel answers with `checkpoint_every_eval`.
+- **Voyage rate-limited:** memories are stored without a vector; the sentinel's similarity falls back to term overlap.
+- **Flight recorder not live:** the `view:*` panes, or `bun run watch`.
+- **Live demo fails:** play the recorded video.

@@ -1,7 +1,7 @@
 # Waypoints v2 contract (13:40): shared by the server, harness and flight-recorder subagents
 
 Direction: the LangGraph agent becomes **the Waypoints harness** (the product). Waypoints (MCP) is its memory. The **sentinel** watches. The **surgeon** changes harness settings through a deterministic gate. The **flight recorder** shows everything.
-Freeze at 15:45. Submit by 16:15. Hermes code stays in the repo, unused.
+Freeze at 16:10. Submit by 16:50 (see docs/PLAN.md). Hermes code stays in the repo, unused.
 
 ## Ownership (no overlapping files)
 - **A (server):** `src/**` (except `src/watch*`), `scripts/**`
@@ -43,7 +43,7 @@ Existing collections are unchanged: objectives, checkpoints, decisions, failures
   - `sentinel_threshold` is between 0 and 1.
   - No `end_state`, objective or bearing field can exist anywhere in the document.
 - **Version switches run in a transaction:** insert the new version, mark the previous one `superseded`, or on rollback mark the probation version `rolled_back` and re-insert the parent's settings as a new `active` version.
-- **Model enum:** `z-ai/glm-5.3-flash`, `anthropic/claude-sonnet-5`, `openai/gpt-5.5`, `gb10`.
+- **Model enum:** `MODELS` in `src/fragments.ts`. The demo uses `z-ai/glm-5.3-flash` (OpenRouter) and `gb10` (local vLLM serving GLM).
 
 ### `src/fragments.ts` (A owns; B imports it read-only)
 A fixed library of `{ id, title, text }`. The model never writes prompt text. Initial ids:
@@ -53,7 +53,7 @@ A fixed library of `{ id, title, text }`. The model never writes prompt text. In
 - `one_change_per_edit`: one bug per edit
 - `read_policies_first`: restate active policies before the first edit
 
-**Seed config v1:** `["checkpoint_every_test", "read_policies_first"]`, required_tools `["checkpoint"]`, threshold **0.25** (a lone regression taps), model **`anthropic/claude-sonnet-5`** (GLM skipped checkpoints in rehearsal).
+**Seed config v1 (lean):** `["read_policies_first"]`, required_tools `["checkpoint"]`, threshold **0.25** (a lone regression taps), model **`z-ai/glm-5.3-flash`**. GLM's skipped checkpoints are sentinel input, not a reason to switch models.
 
 ### `taps` (NEW)
 ```js
@@ -106,9 +106,9 @@ A fixed library of `{ id, title, text }`. The model never writes prompt text. In
 - Sends `settings_version` with every checkpoint. When `settings.reload` is true, it calls `get_settings` again and rebuilds the prompt; it logs a `settings_reload` event through the server response.
 - Prints tap banners: `▲ TAP risk 0.72 → adjust_settings (v4, probation)`.
 - **Models:**
-  - Default `z-ai/glm-5.3-flash` on OpenRouter, with a fallback to `anthropic/claude-sonnet-5`.
-  - `DEMO_PROVIDER=gb10` uses `GB10_BASE_URL`, `GB10_MODEL`, `GB10_API_KEY`.
-  - If GLM skips checkpoints in rehearsal, pin Sonnet 5.
+  - GLM only: `z-ai/glm-5.3-flash` on OpenRouter when `DEMO_PROVIDER` is empty.
+  - `DEMO_PROVIDER=gb10` uses `GB10_BASE_URL`, `GB10_MODEL`, `GB10_API_KEY`, with OpenRouter GLM as fallback.
+  - If GLM skips a checkpoint, the harness writes it and logs `skipped-checkpoint` for the sentinel.
 - `--fresh`, `--die-after N`, `--max-steps N`
 - **Trap bug** in the fixture: the obvious fix to one bug breaks another test that was passing. That makes the bearing drop, so the server logs a `regression` failure and the sentinel taps.
 
