@@ -52,6 +52,3 @@ Live: 3-minute demo + 2-minute Q&A, hard cut at 5 minutes.
 - `docs/STACK.md` — verified TS quick-reference: OpenRouter routers & cost fields, Atlas vector search + autoEmbed, Voyage, LangGraph.js, Strands.
 - `docs/refs/` — raw official doc snapshots (see its README for sources).
 - Live docs via MCP: `docs-langchain`, `langchain-reference`, `openrouter`, `strands-agents`, MongoDB plugin.
-
-## Team (remove before submission)
-Ryan leads; a teammate may join. Onboarding: `team/ONBOARDING.md`. If you're a Claude session on the teammate's machine: don't edit `src/` or `demo/` without Ryan's OK (another agent owns them), `git pull --rebase` before every push, commit small.

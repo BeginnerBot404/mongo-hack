@@ -220,5 +220,4 @@ All code in this repo was written on 2026-09-26 during the event. The first comm
 - [ ] Submitted on Cerebral Valley by 5:00PM
 - [ ] All team members added
 - [ ] Demo shows only event work
-- [ ] Delete `team/` and the "Team" section of CLAUDE.md
 - [ ] Teammate confirmed for MongoDB.local 9/30
