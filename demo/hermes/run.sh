@@ -19,6 +19,9 @@ MODEL="${HERMES_MODEL:-anthropic/claude-sonnet-5}"
 PROMPT="You are the \"hermes\" coding agent. Pass agent=\"hermes\" to every waypoints tool that accepts it.
 The waypoints tools are exposed to you as mcp__waypoints__<tool>. Your cwd is demo/fixture.
 Run tests with: bun test (in the cwd). Edit only invoice.ts.
+HARD RULE: the tool call right after every bun test is mcp__waypoints__checkpoint with bearings_current
+(tests_passing = the pass count). No other action in between. You may be killed at any moment; the last
+checkpoint is all the next agent will see.
 
 $(cat "$REPO/demo/task.md")"
 

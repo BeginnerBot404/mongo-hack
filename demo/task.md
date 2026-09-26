@@ -16,9 +16,11 @@ Fix bugs ONLY in `invoice.ts`. Never edit `invoice.test.ts`. One bug fix per edi
      {"title":"Fix date + paging bugs","done_when":"billableDays and paginate tests pass"},
      {"title":"Fix time + money bugs","done_when":"hoursFromMinutes, totalHours, lineTotal, taxCents tests pass"},
      {"title":"All green","done_when":"all 10 tests pass"}]
-3. After EVERY test run call `checkpoint` with objective_id, a short state_summary, open_threads (the still-
-   failing tests), next_action, bearings_current [{"name":"tests_passing","current":<pass count>}], and
-   waypoint_done (index, 0-based) when a waypoint's done_when is met.
+3. CHECKPOINT RULE (hard): IMMEDIATELY after EVERY `bun test` run, your very next tool call MUST be `checkpoint`,
+   before any other action (no log_failure, log_decision, read, edit or second test run first). Never run
+   `bun test` twice without a checkpoint in between. Pass objective_id, a short state_summary, open_threads (the
+   still-failing tests), next_action, bearings_current [{"name":"tests_passing","current":<pass count>}] (always),
+   and waypoint_done (index, 0-based) when a waypoint's done_when is met.
 4. Before each fix call `log_decision` (decision = the exact change, rationale = why, evidence = the failing
    assertion).
 5. Call `log_failure` with a `class` (use short snake_case classes such as `off_by_one`, `unit_conversion`,
