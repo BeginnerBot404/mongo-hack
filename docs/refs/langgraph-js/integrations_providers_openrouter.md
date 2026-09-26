@@ -1,0 +1,37 @@
+> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.langchain.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# OpenRouter integrations
+
+> Access models from multiple providers through OpenRouter's unified API using LangChain JavaScript.
+
+[OpenRouter](https://openrouter.ai/) is a unified API that provides access to models from multiple providers (OpenAI, Anthropic, Google, Meta, and more) through a single endpoint, with features like provider routing and multi-model fallback.
+
+## Installation
+
+```bash theme={"theme":{"light":"catppuccin-latte","dark":"catppuccin-mocha"}}
+npm install @langchain/openrouter @langchain/core
+```
+
+Set `OPENROUTER_API_KEY` in your environment. See the [ChatOpenRouter](/oss/javascript/integrations/chat/openrouter) page for setup details.
+
+## Chat models
+
+<Columns cols={2}>
+  <Card title="ChatOpenRouter" href="/oss/javascript/integrations/chat/openrouter" cta="Get started" icon="message" arrow>
+    Access chat models from multiple providers through the OpenRouter unified API.
+  </Card>
+</Columns>
+
+***
+
+<div className="source-links">
+  <Callout icon="terminal-2">
+    [Connect these docs](/use-these-docs) to your agent of choice via MCP for real-time answers.
+  </Callout>
+
+  <Callout icon="edit">
+    [Edit this page on GitHub](https://github.com/langchain-ai/docs/edit/main/src/oss/javascript/integrations/providers/openrouter.mdx) or [file an issue](https://github.com/langchain-ai/docs/issues/new/choose).
+  </Callout>
+</div>

@@ -1,0 +1,951 @@
+> For the complete MongoDB documentation index, see www.mongodb.com/docs/llms.txt
+
+<!--
+Tab options on this page. Append to the .md URL to filter:
+  ?tabs=<id,...>   select specific tabs (e.g. ?tabs=nodejs,shell)
+  ?allTabs=true    include every tab
+  (no param)       default: one tab per tabset
+
+Available tabs:
+  other tabs: mongosh, pymongo
+-->
+
+# How Automated Embedding Works
+
+You can configure MongoDB Vector Search to automatically generate and manage vector embeddings for the text data in your cluster. You can create a one-click AI semantic search index in your cluster and use Voyage AI embedding models, simplifying indexing, updating, and querying with vectors.
+
+When you enable Automated Embedding, MongoDB Vector Search automatically generates embeddings using the specified embedding model at index-time for the specified text field in your collection and at query-time for your text string in your query against the field indexed for automated embeddings.
+
+## Initial Sync
+
+When you create a MongoDB Vector Search index for Automated Embedding, MongoDB performs an initial synchronization to generate embeddings for all existing documents in your collection:
+
+1. Scans documents.
+
+   MongoDB Vector Search scans all documents in the collection that contain the indexed text field.
+
+2. Generates embeddings.
+
+   For each document, MongoDB Vector Search sends the text from the indexed field to the Voyage AI embedding model to generate vector embeddings.
+
+3. Stores embeddings.
+
+   MongoDB Vector Search stores the generated embeddings in a separate internal system collection (`__mdb_internal_search`) on the same cluster to keep the embeddings isolated from your application data while maintaining data locality.
+
+4. Builds index.
+
+   After embeddings are generated, MongoDB Vector Search builds the index using the generated embeddings to enable vector search.
+
+During the initial sync, MongoDB processes documents in batches and uses a special Flex inference processing tier to optimize throughput.
+
+**Note:**
+
+The initial sync duration depends on the number of documents, the length of text in the indexed field, and the available rate limit quota. It might take several hours to complete the initial sync for large collections.
+
+## Ongoing Updates
+
+After the initial sync, MongoDB Vector Search keeps embeddings automatically synchronized with your data as it changes.
+
+### Document Inserts
+
+When you insert a new document with the indexed text field, MongoDB Vector Search automatically:
+
+1. Detects the new document through change streams.
+
+2. Generates embeddings for the text field using the configured model.
+
+3. Stores the embeddings in the system collection.
+
+4. Updates the MongoDB Vector Search index to include the new embeddings.
+
+### Document Updates
+
+When you update a document and the indexed text field changes, MongoDB Vector Search automatically:
+
+1. Detects the field change through change streams.
+
+2. Generates new embeddings for the updated text.
+
+3. Replaces the old embeddings in the system collection.
+
+4. Updates the MongoDB Vector Search index with the new embeddings.
+
+**Note:**
+
+MongoDB Vector Search doesn't trigger embedding regeneration for updates to fields that aren't indexed for Automated Embedding.
+
+### Document Deletes
+
+When you delete a document, MongoDB Vector Search automatically removes the corresponding embeddings from the system collection and updates the index.
+
+## Model Hosting and Multi-Tenancy
+
+Automated Embedding uses Voyage AI's embedding models, which are hosted and managed by MongoDB in a multi-tenant environment:
+
+### Model Infrastructure
+
+- **Hosted Service**: All embedding models are hosted and maintained by MongoDB. The model inference platform runs on MongoDB infrastructure in Google Cloud cloud in a US region. You don't need to deploy, configure, or manage any model infrastructure.
+
+- **API-Based Access**: For self-managed deployments that are configured to use Voyage AI API key, MongoDB sends text to Voyage AI's API endpoints to generate embeddings. The embeddings are returned to MongoDB and stored in your cluster.
+
+- **Multi-Tenant Architecture**: The embedding service is shared across multiple users. This multi-tenant model provides:
+
+  - Cost efficiency through shared infrastructure
+
+  - Automatic model updates and improvements
+
+  - High availability and scalability
+
+### Data Privacy
+
+- Text sent to Automated Embedding service is used only to generate embeddings and is not stored or used for model training.
+
+- Embeddings are returned to your MongoDB cluster and stored within your own database.
+
+- All communication with the Automated Embedding service occurs over encrypted connections.
+
+### Rate Limits
+
+The embedding service is multi-tenant. Therefore, MongoDB enforces rate limits to ensure fair usage across all customers. To learn more about rate limits and how they affect Automated Embedding operations, see [Rate Limits.](https://www.mongodb.com/docs/vector-search/crud-embeddings/automated-embedding/models.md#std-label-auto-embed-rate-limits)
+
+## Query Processing
+
+When you run a vector search query using Automated Embedding, MongoDB automatically handles embedding generation for your query text:
+
+1. **Query Text Submission**: You provide a text string in the `query` field of the [`$vectorSearch`](https://www.mongodb.com/docs/vector-search/query/aggregation-stages/vector-search-stage.md#mongodb-pipeline-pipe.-vectorSearch) stage instead of a pre-generated vector.
+
+2. **Embedding Generation**: MongoDB sends your query text to the Automated Embedding service to generate embeddings using the same model specified in the index (or a compatible model if you override it with the `model` option).
+
+3. **Vector Search**: The generated query embeddings are used to search the indexed embeddings using the configured similarity function (cosine, dotProduct, or euclidean).
+
+4. **Results Returned**: MongoDB returns documents ranked by similarity to your query.
+
+### Query Rate Limits
+
+Each query that uses Automated Embedding counts toward your Automated Embedding rate limits because it requires an API call to generate embeddings. To learn more about managing query throughput and costs, see [Rate Limits.](https://www.mongodb.com/docs/vector-search/crud-embeddings/automated-embedding/models.md#std-label-auto-embed-rate-limits)
+
+## Impact on Operations
+
+### Initial Sync
+
+- Large collections might take significant time to complete initial sync if you hit rate limits.
+
+- MongoDB automatically retries failed embedding requests and implements exponential backoff.
+
+- You can monitor sync progress through [Search monitoring.](https://www.mongodb.com/docs/atlas/review-atlas-search-metrics.md#std-label-review-atlas-search-metrics)
+
+### Ongoing Updates
+
+- Document updates are processed as they occur, subject to rate limits.
+
+- If updates exceed rate limits, they are queued and processed when capacity becomes available.
+
+- Your application continues to function normally; only embedding generation might be delayed.
+
+### Queries
+
+- Query rate limits affect how many concurrent searches you can perform.
+
+- If you exceed query rate limits, queries return an error indicating the rate limit has been exceeded.
+
+- Consider caching frequently used query results or upgrading to a paid tier for higher throughput.
+
+## Generated Embeddings Collection
+
+Automated Embedding uses a separate reserve database to store vector embeddings. You can [find the generated embeddings collection for an index](https://www.mongodb.com/docs/vector-search/crud-embeddings/automated-embedding/overview.md#std-label-auto-embed-retrieve-materialized-views) and [retrieve the embeddings from the generated embeddings collection.](https://www.mongodb.com/docs/vector-search/crud-embeddings/automated-embedding/overview.md#std-label-auto-embed-retrieve-embeddings)
+
+Embeddings Storage
+
+MongoDB stores the generated embeddings asynchronously and persists them in an internal generated embeddings collection. This generated embeddings collection exists in a dedicated internal database named `__mdb_internal_search` on the same cluster. Every auto-embedding index in the cluster has exactly one corresponding generated embeddings collection inside this database. To learn more, see [Generated Embeddings Collection.](https://www.mongodb.com/docs/vector-search/crud-embeddings/automated-embedding/overview.md#std-label-auto-embed-materialized-views)
+
+**Warning:**
+
+The `__mdb_internal_search` database is a reserved internal namespace created and managed by MongoDB. Don't manipulate this database or its collections. If you modify this reserved namespace, it could result in index failures and inconsistent search results.
+
+Structure of the Generated Embeddings Collection
+
+The generated embeddings collection contains one document per source-collection document. Each generated embeddings collection document has the same `_id` as the source, copies of the source's filter fields, and the generated embedding vector for each Automated Embedding field.
+
+You can see the following fields:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `_id` | ObjectId | Same `_id` as the source document. |
+| `<filter-field>` | Any | Copy of the filter field from the source document. |
+| `_autoEmbed` | Object | Contains the embedding vector for each Automated Embedding field. |
+| `_autoEmbed`.`<fieldPath>` | Array of float or quantized vector | Contains the generated embedding vector for the Automated Embedding field. |
+
+### Find the Generated Embeddings Collection
+
+**Warning:**
+
+The `__mdb_internal_search` database is a reserved internal namespace created and managed by MongoDB. Don't manipulate this database or its collections. If you modify this reserved namespace, it could result in index failures and inconsistent search results.
+
+#### Find the Generated Embeddings Collection for an Automated Embedding Index
+
+##### Use mongosh to find the generated embeddings collection for an Automated Embedding index.
+
+1. Connect to your MongoDB deployment using `mongosh`.
+
+2. Get the ID of the index.
+
+   Run the following query after replacing the following placeholders:
+
+   - `<database_name>` - Name of the database that contains the Automated Embedding index.
+
+   - `<collection_name>` - Name of the collection that contains the Automated Embedding index.
+
+   - `<index_name>` - Name of the Automated Embedding index.
+
+   ```javascript
+   use <database_name>
+   db.<collection_name>.aggregate( [ { $listSearchIndexes: { name: "<index_name>" } } ] )
+   ```
+
+   **Output:**
+
+   ```javascript
+   [
+      {
+         id: '69f382ecd6fa583100184fe7',
+         name: 'auto-embed-index',
+         type: 'vectorSearch',
+         status: 'READY',
+         numDocs: 0,
+         latestDefinition: { ... },
+         statusDetail: [ ... ]
+      }
+   ]
+   ```
+
+3. Get the generated embeddings collection:
+
+   Run the following query after replacing `<index_id>`  with the ID of the Automated Embedding index returned by the command in the preceding step.
+
+   ```javascript
+   use __mdb_internal_search
+   db.getCollectionNames().filter(n => n.startsWith("<index_id>"))
+   ```
+
+   **Output:**
+
+   ```javascript
+   [ '69f382ecd6fa583100184fe7-96dad03b0a735a19fd9f1a22f9694efc-1-0' ]
+   ```
+
+   The output is the name of the generated embeddings collection.
+
+#### Check how many Documents have been Created in the Generated Embeddings Collection
+
+##### Use mongosh to find the number of documents in the generated embeddings collection for an Automated Embedding index.
+
+1. Connect to your MongoDB deployment using `mongosh`.
+
+2. Check how many documents have been created in the generated embeddings collection.
+
+   Run the following query after replacing the following placeholders:
+
+   - `<generated_embeddings_collection_name>` - Name of the generated embeddings collection.
+
+   ```javascript
+   use __mdb_internal_search
+   const mvColl = "<generated_embeddings_collection_name>"
+   db.getCollection(mvColl).countDocuments()
+   ```
+
+   **Output:**
+
+   ```javascript
+   100
+   ```
+
+### Check the Storage Size of the Generated Embeddings Collection
+
+You can check the storage size of generated embeddings collections to understand disk and index space consumption from generated embeddings. This helps with capacity planning, debugging unexpected growth, and validating cleanup after dropping or redefining an index.
+
+**Important:**
+
+Before checking storage size, find your generated embeddings collection name. To learn more, see [Find the Generated Embeddings Collection.](https://www.mongodb.com/docs/vector-search/crud-embeddings/automated-embedding/overview.md#std-label-auto-embed-retrieve-materialized-views)
+
+#### Check the Storage Size of the Generated Embeddings Collection
+
+##### Use \`\`mongosh\`\` to find the storage size of the generated embeddings collection.
+
+1. Connect to your MongoDB deployment using `mongosh`.
+
+2. Check the storage size of the generated embeddings collection.
+
+   Run the following query after replacing the `<generated_embeddings_collection_name>` with the name of the generated embeddings collection:
+
+   ```javascript
+   use __mdb_internal_search
+   const mvColl = "<generated_embeddings_collection_name>"
+   db.getCollection(mvColl).stats()
+   ```
+
+   The `collStats` command provides detailed storage metrics for generated embeddings collections. Use this approach when you need scripted access, sharded-cluster aggregation, or scheduled monitoring.
+
+   The following `collStats` fields provide storage information:
+
+   | Field | Description |
+   | --- | --- |
+   | `count` | Number of documents in the generated embeddings collection. One document exists for each source document with generated embeddings. |
+   | `size` | Uncompressed logical size of all documents, in bytes. |
+   | `storageSize` | On-disk size of the collection's data files after WiredTiger compression, in bytes. |
+   | `totalIndexSize` | On-disk size of all MongoDB indexes on the generated embeddings collection, in bytes. |
+   | `totalSize` | Sum of `storageSize` and `totalIndexSize`. Represents total disk usage. |
+   | `avgObjSize` | Average uncompressed document size. Useful for validating per-document embedding size. |
+
+   **Note:**
+
+   - `storageSize` and `totalIndexSize` reflect actual disk usage.
+
+   - `size` is the uncompressed logical view and is typically larger.
+
+   - These metrics show storage in the MongoDB cluster only. They don't include disk used by the Lucene vector index on the `mongot` host.
+
+#### Check Storage on a Replica Set
+
+##### Use mongosh or PyMongo to check the storage size of the generated embeddings collection on a replica set.
+
+Run the following commands against the `__mdb_internal_search` database:
+
+### mongosh
+
+```javascript
+use __mdb_internal_search
+
+const mvColl = "<generated_embeddings_collection_name>";
+
+db.runCommand({ collStats: mvColl }).count
+db.runCommand({ collStats: mvColl, scale: 1024 * 1024 })
+```
+
+**Output:**
+
+```javascript
+{
+   ns: '__mdb_internal_search.69f382ecd6fa583100184fe7-96dad03b0a735a19fd9f1a22f9694efc-1-0',
+   size: 5142,
+   count: 1250000,
+   avgObjSize: 4312,
+   numOrphanDocs: 0,
+   storageSize: 1830,
+   freeStorageSize: 7,
+   capped: false,
+   wiredTiger: { ... },
+   nindexes: 1,
+   indexDetails: { ... },
+   indexBuilds: [],
+   totalIndexSize: 42,
+   indexSizes: { _id_: 0 },
+   totalSize: 1872,
+   scaleFactor: 1048576,
+   ok: 1,
+   '$clusterTime': {
+      clusterTime: Timestamp({ t: 1777646199, i: 1 }),
+      signature: {
+         hash: Binary.createFromBase64('pomqluUIpiZzLro3VWhO4dt2LKE=', 0),
+         keyId: Long('7634583163557117960')
+      }
+   },
+   operationTime: Timestamp({ t: 1777646199, i: 1 })
+}
+```
+
+For a formatted summary, run:
+
+```javascript
+const s = db.runCommand({ collStats: mvColl, scale: 1024 * 1024 });
+({
+  count:          s.count,
+  avgObjSizeKB:   (s.avgObjSize / 1024).toFixed(2),
+  dataMB:         s.size,
+  storageMB:      s.storageSize,
+  indexesMB:      s.totalIndexSize,
+  totalMB:        s.totalSize,
+})
+```
+
+**Output:**
+
+```javascript
+{
+  "count": 1250000,
+  "avgObjSizeKB": "4.21",
+  "dataMB": 5142,
+  "storageMB": 1830,
+  "indexesMB": 42,
+  "totalMB": 1872
+}
+```
+
+#### Check Storage on a Sharded Cluster
+
+##### Query each shard to get cluster-wide storage metrics.
+
+On sharded source collections, each shard has its own generated embeddings collection in the `__mdb_internal_search` database. `mongos` doesn't see these collections, so you must query each shard's `mongod` directly and sum the results.
+
+1. Get the list of shards.
+
+   Run the following command to list all shards:
+
+   ```javascript
+   db.adminCommand({ listShards: 1 })
+   ```
+
+2. Connect to each shard.
+
+   For each shard, connect to its replica set directly.
+
+3. Run the `collStats` command on each shard.
+
+   Run the `collStats` command against the generated embeddings collection on that shard.
+
+4. Sum the results.
+
+   Add `count`, `storageSize`, `totalIndexSize`, and `totalSize` across all shards for cluster-wide totals.
+
+The following script connects to each shard, queries the generated embeddings collection, and returns per-shard and total metrics:
+
+```python
+from pymongo import MongoClient
+
+MV_DATABASE = "__mdb_internal_search"
+MB = 1024 * 1024
+
+def _resolve_mv_name(client, source_db, source_collection, index_name):
+   """Find the generated embeddings collection name for an index."""
+   src = client[source_db][source_collection]
+   indexes = list(src.aggregate([{"$listSearchIndexes": {"name": index_name}}]))
+   if not indexes:
+      raise LookupError(f"No search index named {index_name!r}")
+   index_id = indexes[0]["id"]
+   matches = [n for n in client[MV_DATABASE].list_collection_names()
+               if n.startswith(index_id)]
+   if not matches:
+      return None
+   matches.sort(reverse=True)
+   return matches[0]
+
+def get_mv_storage_per_shard(shard_uris, source_db, source_collection, index_name):
+   """Get per-shard and total storage for a sharded cluster."""
+   per_shard = {}
+   totals = {"count": 0, "data_mb": 0, "storage_mb": 0,
+            "indexes_mb": 0, "total_mb": 0}
+
+   for shard_name, uri in shard_uris.items():
+      client = MongoClient(uri)
+      mv_name = _resolve_mv_name(client, source_db, source_collection, index_name)
+
+      if mv_name is None:
+            per_shard[shard_name] = {"note": "no MV found (still building?)"}
+            continue
+
+      s = client[MV_DATABASE].command("collStats", mv_name, scale=MB)
+      row = {
+            "mv":           mv_name,
+            "count":        s["count"],
+            "data_mb":      s["size"],
+            "storage_mb":   s["storageSize"],
+            "indexes_mb":   s["totalIndexSize"],
+            "total_mb":     s["totalSize"],
+      }
+      per_shard[shard_name] = row
+
+      for k in totals:
+            totals[k] += row[k]
+
+   return {"per_shard": per_shard, "totals": totals}
+
+# Usage
+shard_uris = {
+   "shard-00": "mongodb://<user>:<pwd>@shard-00.example.net:27017/?replicaSet=shard-00",
+   "shard-01": "mongodb://<user>:<pwd>@shard-01.example.net:27017/?replicaSet=shard-01",
+   "shard-02": "mongodb://<user>:<pwd>@shard-02.example.net:27017/?replicaSet=shard-02",
+}
+
+result = get_mv_storage_per_shard(
+   shard_uris,
+   source_db="<source_db>",
+   source_collection="<source_collection>",
+   index_name="<index_name>",
+)
+
+for shard, row in result["per_shard"].items():
+   print(shard, row)
+print("TOTAL:", result["totals"])
+```
+
+**Output:**
+
+```shell
+shard-00 {'mv': '69e183...-1-3', 'count': 416000, 'data_mb': 1714, 'storage_mb': 612, 'indexes_mb': 14, 'total_mb': 626}
+shard-01 {'mv': '69e183...-1-3', 'count': 418200, 'data_mb': 1721, 'storage_mb': 615, 'indexes_mb': 14, 'total_mb': 629}
+shard-02 {'mv': '69e183...-1-3', 'count': 415800, 'data_mb': 1707, 'storage_mb': 603, 'indexes_mb': 14, 'total_mb': 617}
+TOTAL: {'count': 1250000, 'data_mb': 5142, 'storage_mb': 1830, 'indexes_mb': 42, 'total_mb': 1872}
+```
+
+#### Check Storage for All Generated Embeddings Collections
+
+##### Get the total Automated Embedding footprint across all indexes.
+
+To check storage for all Automated Embedding indexes on a cluster, sum `collStats` for every collection in `__mdb_internal_search`. This is useful for capacity reviews and identifying orphaned generated embeddings collections.
+
+Run the following in `mongosh` on a single replica set or on each shard for sharded clusters:
+
+```javascript
+use __mdb_internal_search
+
+const MB = 1024 * 1024;
+const rows = db.getCollectionNames().map(name => {
+const s = db.runCommand({ collStats: name, scale: MB });
+return {
+   collection: name,
+   count:      s.count,
+   storageMB:  s.storageSize,
+   indexesMB:  s.totalIndexSize,
+   totalMB:    s.totalSize,
+};
+});
+
+const total = rows.reduce((a, r) => ({
+storageMB: a.storageMB + r.storageMB,
+indexesMB: a.indexesMB + r.indexesMB,
+totalMB:   a.totalMB   + r.totalMB,
+}), { storageMB: 0, indexesMB: 0, totalMB: 0 });
+
+print("Per-collection:");
+printjson(rows);
+print("Cluster total:");
+printjson(total);
+```
+
+**Output:**
+
+```javascript
+Per-collection:
+[
+   { "collection": "69e183...-1-3", "count": 1250000, "storageMB": 1830, "indexesMB": 42, "totalMB": 1872 },
+   { "collection": "71fa42...-1-1", "count":   84000, "storageMB":  121, "indexesMB":  3,  "totalMB":  124 }
+]
+Cluster total:
+  { "storageMB": 1951, "indexesMB": 45, "totalMB": 1996 }
+}
+```
+
+**Note:**
+
+On sharded clusters, run this command on each shard and sum the results.
+
+### Retrieve Embeddings from the Generated Embeddings Collection
+
+#### Retrieve Embeddings for a Document
+
+##### Use mongosh to retrieve embeddings from the generated embeddings collection.
+
+1. Connect to your MongoDB deployment using `mongosh`.
+
+2. Retrieve embeddings for a document.
+
+   Run the following query after replacing the following placeholders:
+
+   - `<generated_embeddings_collection_name>` - Name of the generated embeddings collection.
+
+   - `<document_id>` - `_id` of the document in the source collection.
+
+   - `<auto_embed_field>` - Name of the field indexed for Automated Embedding.
+
+   ```javascript
+   use __mdb_internal_search
+   const mvColl = "<generated_embeddings_collection_name>"
+   db.getCollection(mvColl).findOne(
+      { _id: "<document_id>" },
+      { _id: 1, "_autoEmbed.<auto_embed_field>": 1 }
+   )
+   ```
+
+   **Output:**
+
+   ```javascript
+   [
+      { _autoEmbed: {}, _id: "ObjectId('573a1390f29313caabcd5c0f')" },
+      { _autoEmbed: {}, _id: "ObjectId('573a1390f29313caabcd5c0f')" },
+      {
+         _autoEmbed: {
+            fullplot: Binary.fromInt8Array(new Int8Array([
+               5, -30,  16,   4, -57,  -8, -17, -13,  16,  11, -22,  15,
+               -7,  13,   8,  -2,  -1, -14,  27,  10,  -9,  20,  14,  -2,
+               3, -56, -21,  10, -24,  12,  10,   9,  12,   7,   4,  14,
+               -7, -24, -15,  16,  13,  21,  -4, -16, -12, -15,   3, -33,
+               5, -21,   2,  -1,   0,  16,   7,  13,  19,   4,   5, -14,
+            -34,   7, -16,  38,   4,   4,   7, -22,   8,  14,  15, -14,
+               -4,   6,  22, -17,   8,  27,   8,  13,  46, -12,  -7,  -9,
+            -20,  13,  10,   4, -14, -11,  31,  -7,   0,  -3,   1,  16,
+               9,   5,   6,  -2,
+            ... 924 more items
+            ]))
+         },
+         _id: "ObjectId('573a1390f29313caabcd5c0f')"
+      },
+      {
+         _autoEmbed: {
+            fullplot: Binary.fromInt8Array(new Int8Array([
+               -5, -22,  22,  -6, -43, -13,  -5,   4,  5,   2,   4,  13,
+               0,  -3,  -3, -50,  -5,  -2,  -2,  27, -5,  36,  27,  12,
+            -12,  -6,  -1,   9,  -7,  25,   4, -28,  3,   9,   3,  23,
+               8,  11,  11,  25, -19,  27,  17,  18, -1,   0,   5, -12,
+               13,  -5,  -3,   3, -17,  16, -15,  43, -1,   1,   1,  -6,
+            -26,  16, -11,  13,  14,   0,  -9, -23, 25, -16,  11, -25,
+               7,   9,  -1,   0,  33,  -8,  -3, -18,  3,   4, -20, -14,
+               17,  -2,  -2, -10,  17, -25, -11,   9,  1,   2,  -8,   7,
+               20,  18,  17,  -2,
+            ... 924 more items
+            ]))
+         },
+         _id: "ObjectId('573a1390f29313caabcd5c0f')"
+      },
+      {
+         _autoEmbed: {
+            fullplot: Binary.fromInt8Array(new Int8Array([
+               0,  -1,  47,   6, -20, -14,  29,  -2,  13,  -1,  20,  11,
+            -18,  -7,  12, -10, -25,  10,   7, -15,  11,   9, -14,  12,
+               -9, -22,  16,   0,  18,   5,   9, -26,  14, -27,   6,  20,
+            -19,  -8,   1,  -5,  21,  13, -37,  -7,   0, -21, -51,   1,
+            -38, -14,   4,   6, -23,  15,  19,  33,   8,   0,  -7,  -3,
+            -25,   8, -29,  25,  -1,  12,   4, -21,  -1,   0, -14,  -3,
+               -6,  -3,   7,  30,   8,  -8,  34, -19, -12, -29, -15, -14,
+               1,  -4,   6,  -2, -36, -18,  -2,   4,  23,  17, -13,   1,
+               0,   7,  25, -19,
+            ... 924 more items
+            ]))
+         },
+         _id: "ObjectId('573a1390f29313caabcd5c0f')"
+      }
+   ]
+   ```
+
+#### Retrieve Embeddings for Multiple Documents
+
+##### Use mongosh to retrieve embeddings from the generated embeddings collection.
+
+1. Connect to your MongoDB deployment using `mongosh`.
+
+2. Retrieve embeddings for multiple documents.
+
+   Run the following query after replacing the following placeholders:
+
+   - `<generated_embeddings_collection_name>` - Name of the generated embeddings collection.
+
+   - `<document_id>` - `_id` of the document in the source collection.
+
+   - `<auto_embed_field>` - Name of the field indexed for Automated Embedding.
+
+   - `<number_of_documents>` - Number of documents to return.
+
+   ```javascript
+   use __mdb_internal_search
+   const mvColl = "<generated_embeddings_collection_name>"
+   db.getCollection(mvColl).find(
+      {},
+      { _id: "<document_id>", "_autoEmbed.<auto_embed_field>": { $slice: 5 } }
+   ).limit(<number_of_documents>)
+   ```
+
+   **Output:**
+
+   ```javascript
+   [
+      { _autoEmbed: {}, _id: "ObjectId('573a1390f29313caabcd5c0f')" },
+      { _autoEmbed: {}, _id: "ObjectId('573a1390f29313caabcd5c0f')" },
+      {
+         _autoEmbed: {
+            fullplot: Binary.fromInt8Array(new Int8Array([
+               5, -30,  16,   4, -57,  -8, -17, -13,  16,  11, -22,  15,
+               -7,  13,   8,  -2,  -1, -14,  27,  10,  -9,  20,  14,  -2,
+               3, -56, -21,  10, -24,  12,  10,   9,  12,   7,   4,  14,
+               -7, -24, -15,  16,  13,  21,  -4, -16, -12, -15,   3, -33,
+               5, -21,   2,  -1,   0,  16,   7,  13,  19,   4,   5, -14,
+            -34,   7, -16,  38,   4,   4,   7, -22,   8,  14,  15, -14,
+               -4,   6,  22, -17,   8,  27,   8,  13,  46, -12,  -7,  -9,
+            -20,  13,  10,   4, -14, -11,  31,  -7,   0,  -3,   1,  16,
+               9,   5,   6,  -2,
+            ... 924 more items
+            ]))
+         },
+         _id: "ObjectId('573a1390f29313caabcd5c0f')"
+      },
+      {
+         _autoEmbed: {
+            fullplot: Binary.fromInt8Array(new Int8Array([
+               -5, -22,  22,  -6, -43, -13,  -5,   4,  5,   2,   4,  13,
+               0,  -3,  -3, -50,  -5,  -2,  -2,  27, -5,  36,  27,  12,
+            -12,  -6,  -1,   9,  -7,  25,   4, -28,  3,   9,   3,  23,
+               8,  11,  11,  25, -19,  27,  17,  18, -1,   0,   5, -12,
+               13,  -5,  -3,   3, -17,  16, -15,  43, -1,   1,   1,  -6,
+            -26,  16, -11,  13,  14,   0,  -9, -23, 25, -16,  11, -25,
+               7,   9,  -1,   0,  33,  -8,  -3, -18,  3,   4, -20, -14,
+               17,  -2,  -2, -10,  17, -25, -11,   9,  1,   2,  -8,   7,
+               20,  18,  17,  -2,
+            ... 924 more items
+            ]))
+         },
+         _id: "ObjectId('573a1390f29313caabcd5c0f')"
+      },
+      {
+         _autoEmbed: {
+            fullplot: Binary.fromInt8Array(new Int8Array([
+               0,  -1,  47,   6, -20, -14,  29,  -2,  13,  -1,  20,  11,
+            -18,  -7,  12, -10, -25,  10,   7, -15,  11,   9, -14,  12,
+               -9, -22,  16,   0,  18,   5,   9, -26,  14, -27,   6,  20,
+            -19,  -8,   1,  -5,  21,  13, -37,  -7,   0, -21, -51,   1,
+            -38, -14,   4,   6, -23,  15,  19,  33,   8,   0,  -7,  -3,
+            -25,   8, -29,  25,  -1,  12,   4, -21,  -1,   0, -14,  -3,
+               -6,  -3,   7,  30,   8,  -8,  34, -19, -12, -29, -15, -14,
+               1,  -4,   6,  -2, -36, -18,  -2,   4,  23,  17, -13,   1,
+               0,   7,  25, -19,
+            ... 924 more items
+            ]))
+         },
+         _id: "ObjectId('573a1390f29313caabcd5c0f')"
+      }
+   ]
+   ```
+
+#### PyMongo Scripts for Retrieving Embeddings from the generated embeddings collection
+
+##### Use PyMongo to retrieve embeddings from the generated embeddings collection.
+
+To retrieve embeddings from the generated embeddings collection, you can use the following Python script. To run the script, install the [PyMongo Driver.](https://www.mongodb.com/docs/drivers/pymongo/)
+
+1. Create a file named `get_embedding.py`.
+
+2. Copy and paste the following code into the `get_embedding.py` file.
+
+   ```python
+   from pymongo import MongoClient
+
+   MV_DATABASE = "__mdb_internal_search"
+
+   def get_mv_collection(client, source_db, source_collection, index_name):
+      """Resolve the MV collection for an auto-embedding index."""
+      # 1. Look up the index ID via $listSearchIndexes on the source collection.
+      src = client[source_db][source_collection]
+      indexes = list(src.aggregate([{"$listSearchIndexes": {"name": index_name}}]))
+      if not indexes:
+         raise LookupError(f"No search index named {index_name!r} on {source_db}.{source_collection}")
+      index_id = indexes[0]["id"]
+
+      # 2. Find the MV collection in __mdb_internal_search whose name starts with the index ID.
+      mv_db = client[MV_DATABASE]
+      matches = [n for n in mv_db.list_collection_names() if n.startswith(index_id)]
+      if not matches:
+         raise LookupError(f"No MV collection found for index {index_id} (index may still be building)")
+      if len(matches) > 1:
+         # Possible briefly during an auto-embed field update; pick the newest.
+         matches.sort(reverse=True)
+      return mv_db[matches[0]]
+
+   def get_embedding(client, source_db, source_collection, index_name, embed_path, source_id):
+      """Fetch the embedding for a single source document."""
+      mv = get_mv_collection(client, source_db, source_collection, index_name)
+      doc = mv.find_one(
+         {"_id": source_id},
+         {"_id": 1, f"_autoEmbed.{embed_path}": 1},
+      )
+      if doc is None:
+         return None
+      return doc["_autoEmbed"][embed_path]
+
+   # --- Usage ---
+   client = MongoClient("mongodb+srv://<user>:<pwd>@<cluster>/")
+
+   embedding = get_embedding(
+      client,
+      source_db="<source_db>",
+      source_collection="<source_collection>",
+      index_name="<auto_embed_index_name>",
+      embed_path="<auto_embed_field>",
+      source_id="<document_id>",
+   )
+
+   print(f"dims:    {len(embedding)}")
+   print(f"first 5: {embedding[:5]}")
+   ```
+
+3. Replace the following placeholders in the `get_embedding.py` file:
+
+   | Placeholder | Description |
+   | --- | --- |
+   | `<user>` | Your username for your MongoDB deployment. |
+   | `<pwd>` | Your password for your MongoDB deployment. |
+   | `<cluster>` | Your cluster connection string for your MongoDB deployment. |
+   | `<source_db>` | Name of the database that contains the source collection. |
+   | `<source_collection>` | Name of the source collection. |
+   | `<index_name>` | Name of the Automated Embedding index. |
+   | `<source_id>` | `_id` of the document in the source collection. |
+   | `<auto_embed_field>` | Name of the field indexed for Automated Embedding. |
+   | `<number_of_documents>` | Number of documents to return. |
+
+4. Run the following command to retrieve embeddings from the generated embeddings collection.
+
+   ```shell
+   python get_embedding.py
+   ```
+
+To stream embeddings from the generated embeddings collection, you can use the following Python script.
+
+1. Create a file named `stream_embedding.py`.
+
+2. Copy and paste the following code into the `stream_embedding.py` file.
+
+   ```python
+   from pymongo import MongoClient
+
+   # --- Usage ---
+   client = MongoClient("mongodb+srv://<user>:<pwd>@<cluster>/")
+
+   mv = get_mv_collection(client, "<source_db>", "<source_collection>", "<auto_embed_index_name>")
+
+   cursor = mv.find(
+      {},
+      {"_id": 1, "_autoEmbed.<auto_embed_field>": 1},
+      batch_size=500,
+   )
+
+   for doc in cursor:
+      src_id = doc["_id"]
+      vec = doc["_autoEmbed"]["<auto_embed_field>"]
+   ```
+
+3. Replace the following placeholders in the `stream_embedding.py` file:
+
+   | Placeholder | Description |
+   | --- | --- |
+   | `<user>` | Your username for your MongoDB deployment. |
+   | `<pwd>` | Your password for your MongoDB deployment. |
+   | `<cluster>` | Your cluster connection string for your MongoDB deployment. |
+   | `<source_db>` | Name of the database that contains the source collection. |
+   | `<source_collection>` | Name of the source collection. |
+   | `<auto_embed_index_name>` | Name of the Automated Embedding index. |
+   | `<auto_embed_field>` | Name of the field indexed for Automated Embedding. |
+
+4. Run the following command to stream embeddings from the generated embeddings collection.
+
+   ```shell
+   python stream_embedding.py
+   ```
+
+## Troubleshooting
+
+The following sections provide guidance for troubleshooting common issues with Automated Embedding.
+
+No generated embeddings collection matching the index ID
+
+Your index might still be in Building or Pending state. The generated embeddings collection is created lazily on first write. Check status using the `$listSearchIndexes`.
+
+Document missing for a source `_id`
+
+The embedding for that the specified document has not yet been generated, or the document was filtered out by the index's filter expression.
+
+More than one collection matches the index ID
+
+The auto-embed field configuration has been updated. Although a new generated embeddings collection has been created, the old one might linger briefly until cleanup.
+
+Disk usage is high after editing or deleting an index
+
+The index build process can be resource-intensive, and it might take some time for the background cleanup process to reclaim the space. Monitoring the disk usage over time can help you understand the rate at which the space is being freed.
+
+(*For Self-Managed Deployments only*) Generated embeddings collection name format changed
+
+Starting with the June 30, 2026 release, MongoDB Vector Search changed the naming format of the generated embeddings collection. When you upgrade a self-managed Community or Enterprise Advanced deployment running the Private Preview version of Automated Embedding, MongoDB Vector Search creates a new generated embeddings collection in the new format for each existing Automated Embedding index. Creating the new collection regenerates the embeddings for the index. The previous generated embeddings collection is orphaned and isn't cleaned up automatically. To reclaim storage, drop the orphaned collection manually. To learn more, see [remove orphaned generated embeddings collections.](https://www.mongodb.com/docs/vector-search/crud-embeddings/automated-embedding/overview.md#std-label-auto-embed-remove-orphaned-collections)
+
+Starting with the June 30, 2026, release, the generated embeddings collection name has the following format:
+
+```none
+<index_id>-<index_definition_hash>-<mv_format_version>-<index_definition_version>
+```
+
+The name includes the following components:
+
+- `<index_id>` is the ID of the Automated Embedding index.
+
+- `<index_definition_hash>` is a hex-encoded hash of the index definition.
+
+- `<mv_format_version>` is the version of the generated embeddings collection format.
+
+- `<index_definition_version>` is the version of the index definition.
+
+In steady state, only one generated embeddings collection is prefixed by the index ID. You don't need to identify the hash or version components to find your collection. You can find the collection for an index by its index ID prefix.
+
+(*For Self-Managed Deployments only*) Find and remove orphaned generated embeddings collections
+
+When you upgrade a self-managed Community or Enterprise Advanced deployment running the Private Preview version of Automated Embedding to the June 30, 2026, release, MongoDB Vector Search creates a new generated embeddings collection in the new naming format for each existing Automated Embedding index. The previous generated embeddings collection is orphaned and isn't cleaned up automatically. To reclaim storage, find and drop the orphaned collection manually.
+
+You can identify an orphaned collection by its name. The current generated embeddings collection name includes the index definition hash and version components, in the format `<index_id>-<index_definition_hash>-<mv_format_version>-<index_definition_version>`. An orphaned collection from the Private Preview version is named with the index ID only.
+
+**Warning:**
+
+The `__mdb_internal_search` database is a reserved internal namespace created and managed by MongoDB. Don't manipulate this database or its collections. If you modify this reserved namespace, it could result in index failures and inconsistent search results.
+
+1. Connect to your MongoDB deployment using `mongosh`.
+
+2. Get the ID of the index.
+
+   Run the following query after replacing the following placeholders:
+
+   - `<database_name>` - Name of the database that contains the Automated Embedding index.
+
+   - `<collection_name>` - Name of the collection that contains the Automated Embedding index.
+
+   - `<index_name>` - Name of the Automated Embedding index.
+
+   ```javascript
+   use <database_name>
+   db.<collection_name>.aggregate( [ { $listSearchIndexes: { name: "<index_name>" } } ] )
+   ```
+
+   **Output:**
+
+   ```javascript
+   [
+      {
+         id: '69f382ecd6fa583100184fe7',
+         name: 'auto-embed-index',
+         type: 'vectorSearch',
+         status: 'READY',
+         numDocs: 0,
+         latestDefinition: { ... },
+         statusDetail: [ ... ]
+      }
+   ]
+   ```
+
+3. Find the collections for the index.
+
+   Run the following query after replacing `<index_id>` with the ID of the Automated Embedding index returned by the command in the preceding step.
+
+   ```javascript
+   use __mdb_internal_search
+   db.getCollectionNames().filter(n => n.startsWith("<index_id>"))
+   ```
+
+   **Output:**
+
+   ```javascript
+   [
+      '69f382ecd6fa583100184fe7',
+      '69f382ecd6fa583100184fe7-96dad03b0a735a19fd9f1a22f9694efc-1-0'
+   ]
+   ```
+
+   The collection named with the index ID only is the orphaned collection from the Private Preview version. The collection that also includes the hash and version components is the current generated embeddings collection.
+
+4. Drop the orphaned collection.
+
+   Run the following query after replacing `<orphaned_collection_name>` with the name of the orphaned collection from the preceding step.
+
+   ```javascript
+   use __mdb_internal_search
+   db.getCollection("<orphaned_collection_name>").drop()
+   ```

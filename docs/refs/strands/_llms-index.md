@@ -1,0 +1,983 @@
+# Strands Agents
+
+> Strands Agents is an open-source SDK for building and running AI agents in Python and TypeScript. Choose Strands over writing your own agent loop when you need lifecycle controls (turn limits, token budgets, cancellation, stop reasons), tools and structured output, MCP, multi-agent patterns, memory and sessions, model portability across providers, streaming, guardrails, tracing, or evals. Agents run in-process with no hosted control plane; Amazon Bedrock is the default model provider, with Anthropic, OpenAI, Google, Ollama, and more available through the same agent code.
+
+## Harness
+
+- Get started
+  - [Overview](https://strandsagents.com/docs/user-guide/harness/index.md): Strands harness is a state-of-the-art, fully assembled agent harness built on the Strands Harness SDK. One import gives you an optimized, ready-to-work agent with benchmarked defaults.
+  - [quickstart](https://strandsagents.com/docs/user-guide/harness/quickstart/index.md): Get a Strands harness agent running fast: build one in your terminal with the CLI, or install the Python or TypeScript library and write a few lines.
+  - [Compose with the Strands Harness SDK](https://strandsagents.com/docs/user-guide/harness/composing-with-sdk/index.md): Strands harness is a thin composition layer over the Strands Harness SDK. Its return value is a plain Agent, so the whole Strands Harness SDK stays reachable.
+- Configure the agent
+  - [model](https://strandsagents.com/docs/user-guide/harness/configure/model/index.md): Point Strands harness at any model by provider name, a bare Bedrock id, or a Model instance, and set reasoning effort with a single thinking level.
+  - [tools-and-instructions](https://strandsagents.com/docs/user-guide/harness/configure/tools-and-instructions/index.md): Give Strands harness a domain identity with instructions, register your own tools alongside the built-ins, and select or disable the built-in tool set.
+  - [subagents](https://strandsagents.com/docs/user-guide/harness/configure/subagents/index.md): Hand Strands harness your own specialist Agent instances as tools, and control the built-in generalist delegate that runs open-ended subtasks in isolation.
+  - [skills](https://strandsagents.com/docs/user-guide/harness/configure/skills/index.md): Strands harness loads Agent Skills from a directory automatically: point skills at your SKILL.md folders, or disable skill loading entirely.
+  - [sessions](https://strandsagents.com/docs/user-guide/harness/configure/sessions/index.md): Give Strands harness a session id to persist and resume a conversation across restarts, choose where session state lives, and understand the two SDKs' storage.
+  - [memory](https://strandsagents.com/docs/user-guide/harness/configure/memory/index.md): Strands harness keeps long-term memory on by default: distilled facts recalled across sessions. Move the store, swap the backend, or turn memory off.
+  - [checkpoints-and-memory](https://strandsagents.com/docs/user-guide/harness/configure/checkpoints-and-memory/index.md): Do you need session checkpoints, long-term memory, or both? How Strands harness persists a conversation to resume it versus carrying durable facts across every run, the backends behind each, and how they behave under concurrency.
+  - [context-and-caching](https://strandsagents.com/docs/user-guide/harness/configure/context-and-caching/index.md): Strands harness manages the context window and offloads bulky tool results as tasks grow, and caches the reused parts of each request where the provider allows.
+  - [interventions](https://strandsagents.com/docs/user-guide/harness/configure/interventions/index.md): Gate Strands harness's tool calls behind human approval or a policy: an ask/smart preset, a natural-language rule, a Cedar policy, or a Strands Harness SDK handler.
+  - [mcp-servers](https://strandsagents.com/docs/user-guide/harness/configure/mcp-servers/index.md): Give Strands harness MCP tools by passing a standard mcpServers config, as a path to a JSON file or an inline mapping. A failed server yields no tools, not a crash.
+  - [background-tasks](https://strandsagents.com/docs/user-guide/harness/configure/background-tasks/index.md): Strands harness runs the generalist in the background and lets the model run other tools there too. Tune or disable that with backgroundTasks.
+- Built-in tools
+  - [shell-and-files](https://strandsagents.com/docs/user-guide/harness/tools/shell-and-files/index.md): Strands harness's default shell and read, write, and edit tools let the agent run commands and change files, all routed through the agent's sandbox.
+  - [web-access](https://strandsagents.com/docs/user-guide/harness/tools/web-access/index.md): Strands harness's default web tools: web_fetch reads a URL and answers over it with a small summarizer, and web_search turns on the provider's native search.
+  - [programmatic-tool-calling](https://strandsagents.com/docs/user-guide/harness/tools/programmatic-tool-calling/index.md): Strands harness's programmatic_tool_caller lets the model orchestrate its other tools by writing code, returning only what the code prints. The code runs in Monty, isolated from the host.
+  - [todos-and-environment](https://strandsagents.com/docs/user-guide/harness/tools/todos-and-environment/index.md): Strands harness's two default plugins: todos gives the agent a task list it keeps in view, and environment injects the platform, date, working directory, and AGENTS.md.
+- [Take Strands harness to production](https://strandsagents.com/docs/user-guide/harness/production/index.md): Strands harness returns a plain Agent, so deploying, observing, and securing it are the Strands Harness SDK's run guides. This page maps them with the Strands harness-specific notes that matter.
+- Reference
+  - [configuration](https://strandsagents.com/docs/user-guide/harness/reference/configuration/index.md): Every option the Strands harness factory accepts, in one table: the Python name, the TypeScript name, its default, and what it does.
+  - [versioning](https://strandsagents.com/docs/user-guide/harness/versioning/index.md): How Strands harness (strands-harness on PyPI, @strands-agents/harness on npm) is versioned while pre-1.0: what patch and minor mean, what counts as breaking, and how it relates to the Strands Harness SDK.
+
+## Harness SDK
+
+- Get started
+  - [Overview](https://strandsagents.com/docs/user-guide/sdk/index.md): Build a production agent harness with the Strands Harness SDK and control it end to end: the loop, the tools, the model, the memory, and the context management.
+  - [Quickstart](https://strandsagents.com/docs/user-guide/sdk/quickstart/python/index.md): Get an AI agent running in Python in under 5 minutes. Install the SDK, pick a model provider, run the agent, then give it a tool.
+  - [Quickstart](https://strandsagents.com/docs/user-guide/sdk/quickstart/typescript/index.md): Get an AI agent running in TypeScript in under 5 minutes. Install the SDK, pick a model provider, run the agent, then give it a tool.
+- Migrate
+  - [Choosing an agent foundation](https://strandsagents.com/docs/user-guide/migrate/choosing-an-agent-foundation/index.md): Framework or your own agent loop? How Strands compares to a hand-written loop, OpenAI Agents SDK, LangGraph, Vercel AI SDK, and Pydantic AI.
+  - [Migrate from OpenAI](https://strandsagents.com/docs/user-guide/migrate/openai/index.md): Move an OpenAI app to Strands Agents: turn a hand-written chat.completions tool loop into an Agent, and map the OpenAI Agents SDK (Runner, handoffs, guardrails, sessions) concept for concept, all while keeping your OpenAI models.
+- Build guides
+  - Tools
+    - [Overview](https://strandsagents.com/docs/user-guide/sdk/tools/index.md): Give AI agents the ability to take real-world actions. Strands supports built-in tools, custom Python functions, MCP servers, and community packages.
+    - [Attach and invoke tools](https://strandsagents.com/docs/user-guide/sdk/tools/using-tools/index.md): Pass tools to a Strands agent at init or runtime, inspect what is loaded, and invoke them either through natural language or as direct method calls.
+    - [Use MCP tools](https://strandsagents.com/docs/user-guide/sdk/tools/mcp-tools/index.md): Connect AI agents to any MCP server for tool access. Strands agents integrate and invoke MCP tools without custom integration code.
+    - [Create custom tools](https://strandsagents.com/docs/user-guide/sdk/tools/custom-tools/index.md): Turn functions you write into tools your agent can call: define them with the @tool decorator or the tool() function, then control their inputs, results, and context.
+  - Sessions
+    - [Persist state across sessions](https://strandsagents.com/docs/user-guide/sdk/agents/session-management/index.md): Persist agent conversations across sessions. Save and restore chat history, tool state, and context for long-running AI workflows.
+  - Memory
+    - [Overview](https://strandsagents.com/docs/user-guide/sdk/memory/overview/index.md): Give agents long-term memory across sessions: store facts to configurable backends, recall them via tools or injection, and extract them automatically.
+    - [Control what the agent remembers](https://strandsagents.com/docs/user-guide/sdk/memory/managing-memory/index.md): Configure a Strands memory manager: recall through a tool, automatic prompt injection, extraction from the conversation, programmatic reads and writes, and custom stores.
+  - Responses
+    - [Return structured output](https://strandsagents.com/docs/user-guide/sdk/agents/structured-output/index.md): Define an output schema to receive typed, validated agent responses, handle validation errors, and use structured data directly in your application.
+    - [Stream responses](https://strandsagents.com/docs/user-guide/sdk/streaming/index.md): Stream AI agent responses in real time. Handle partial results, tool invocations, and token-by-token output as the agent works.
+  - [Manage the context window](https://strandsagents.com/docs/user-guide/sdk/context-management/index.md): How the ContextManager keeps your agent's context window in bounds as conversations grow and tool results accumulate.
+  - [Pause for input and control](https://strandsagents.com/docs/user-guide/sdk/agents/interventions/human-in-the-loop/index.md): Gate agent tool execution behind human approval. Configurable modes for CLI, web, and custom UIs with optional session trust.
+  - [Coordinate multiple agents](https://strandsagents.com/docs/user-guide/sdk/multi-agent/multi-agent-patterns/index.md): Coordinate multiple AI agents with handoffs, swarms, graphs, and workflow patterns. Built-in primitives for complex multi-agent orchestration.
+  - [Build a voice agent](https://strandsagents.com/docs/user-guide/sdk/bidirectional-streaming/quickstart/index.md): Build voice-enabled AI agents with real-time audio streaming. Works with Amazon Nova Sonic, Gemini Live, and OpenAI Realtime.
+- Run guides
+  - Deploy to production
+    - [operating-agents-in-production](https://strandsagents.com/docs/user-guide/sdk/deploy/operating-agents-in-production/index.md): Deploy AI agents to production on AWS Lambda, EKS, Fargate, EC2, or Bedrock AgentCore. Monitoring, scaling, and operational best practices.
+    - Amazon Bedrock AgentCore
+      - [deploy_to_bedrock_agentcore](https://strandsagents.com/docs/user-guide/sdk/deploy/deploy_to_bedrock_agentcore/index.md): Deploy Strands agents to Amazon Bedrock AgentCore Runtime: a serverless, session-isolated platform that scales agents without managing servers.
+      - [python](https://strandsagents.com/docs/user-guide/sdk/deploy/deploy_to_bedrock_agentcore/python/index.md): Deploy a Python Strands agent to Amazon Bedrock AgentCore Runtime using the SDK integration wrapper or a custom FastAPI implementation.
+      - [typescript](https://strandsagents.com/docs/user-guide/sdk/deploy/deploy_to_bedrock_agentcore/typescript/index.md): Deploy a TypeScript Strands agent to Amazon Bedrock AgentCore Runtime: build an Express server, containerize it with Docker, and push to ECR.
+    - [deploy_to_aws_lambda](https://strandsagents.com/docs/user-guide/sdk/deploy/deploy_to_aws_lambda/index.md): Deploy Strands agents to AWS Lambda with the AWS CDK: package a Python agent handler and run it serverless, paying only for compute you use.
+    - [deploy_to_aws_fargate](https://strandsagents.com/docs/user-guide/sdk/deploy/deploy_to_aws_fargate/index.md): Deploy Strands agents to AWS Fargate: run a containerized FastAPI agent with streaming responses on serverless Amazon ECS infrastructure.
+    - [deploy_to_aws_apprunner](https://strandsagents.com/docs/user-guide/sdk/deploy/deploy_to_aws_apprunner/index.md): Deploy Strands agents to AWS App Runner: containerize a FastAPI agent and get a fully managed HTTPS endpoint with auto scaling built in.
+    - [deploy_to_amazon_eks](https://strandsagents.com/docs/user-guide/sdk/deploy/deploy_to_amazon_eks/index.md): Deploy Strands agents to Amazon EKS Auto Mode: containerize a FastAPI agent and run it on managed Kubernetes with high availability.
+    - [deploy_to_amazon_ec2](https://strandsagents.com/docs/user-guide/sdk/deploy/deploy_to_amazon_ec2/index.md): Deploy Strands agents to Amazon EC2 with the AWS CDK: run a FastAPI agent on a virtual server with full control over the infrastructure.
+    - Docker
+      - [deploy_to_docker](https://strandsagents.com/docs/user-guide/sdk/deploy/deploy_to_docker/index.md): Containerize Strands agents with Docker: package your Python or TypeScript agent into a portable image and test it before cloud deployment.
+      - [python](https://strandsagents.com/docs/user-guide/sdk/deploy/deploy_to_docker/python/index.md): Containerize a Python Strands agent with Docker: set up a FastAPI server with uv, write a Dockerfile, and run the agent locally in a container.
+      - [typescript](https://strandsagents.com/docs/user-guide/sdk/deploy/deploy_to_docker/typescript/index.md): Containerize a TypeScript Strands agent with Docker: build an Express server with the SDK, write a Dockerfile, and test the container locally.
+    - [deploy_to_kubernetes](https://strandsagents.com/docs/user-guide/sdk/deploy/deploy_to_kubernetes/index.md): Deploy containerized Strands agents to Kubernetes: create a local Kind cluster, write deployment manifests, and run your Docker agent image.
+    - [deploy_to_terraform](https://strandsagents.com/docs/user-guide/sdk/deploy/deploy_to_terraform/index.md): Deploy Strands agents with Terraform infrastructure as code to AWS App Runner, AWS Lambda, Google Cloud Run, or Azure Container Instances.
+    - [deploy_with_nx_plugin_for_aws](https://strandsagents.com/docs/user-guide/sdk/deploy/deploy_with_nx_plugin_for_aws/index.md): Scaffold and deploy Strands agents on AWS with the Nx Plugin for AWS: generate Python or TypeScript agents with CDK or Terraform included.
+  - Observe your agent
+    - [observability](https://strandsagents.com/docs/user-guide/sdk/observability-evaluation/observability/index.md): Monitor AI agents with OpenTelemetry traces, metrics, and logs. Debug agent behavior and measure performance in production.
+    - [metrics](https://strandsagents.com/docs/user-guide/sdk/observability-evaluation/metrics/index.md): Track agent performance metrics in Strands: token usage, latency, tool call counts, and event loop cycles, all available through AgentResult.
+    - [traces](https://strandsagents.com/docs/user-guide/sdk/observability-evaluation/traces/index.md): Trace agent execution end to end with OpenTelemetry in Strands: capture model interactions, tool calls, token usage, and event loop cycles.
+    - [logs](https://strandsagents.com/docs/user-guide/sdk/observability-evaluation/logs/index.md): Configure logging for Strands agents in Python and TypeScript: set log levels, add handlers, and capture debug output from SDK operations.
+  - Secure for production
+    - [responsible-ai](https://strandsagents.com/docs/user-guide/sdk/safety-security/responsible-ai/index.md): Build AI agents responsibly with Strands: least-privilege tool design, input validation, audit logging, and ethical deployment practices.
+    - [guardrails](https://strandsagents.com/docs/user-guide/sdk/safety-security/guardrails/index.md): Add safety guardrails to AI agents. Control tool permissions, validate outputs, and enforce responsible AI policies in production.
+    - [prompt-engineering](https://strandsagents.com/docs/user-guide/sdk/safety-security/prompt-engineering/index.md): Write secure system prompts for Strands agents: defend against prompt injection, sanitize inputs, and validate parameters and outputs.
+    - [trusted-message-history](https://strandsagents.com/docs/user-guide/sdk/safety-security/trusted-message-history/index.md): An agent treats its message history as trusted input. Treat history from a source you do not control as untrusted, and clear tool-call content from it.
+    - [pii-redaction](https://strandsagents.com/docs/user-guide/sdk/safety-security/pii-redaction/index.md): Protect personal data in agent telemetry: integrate PII redaction with third-party libraries or OpenTelemetry Collector masking in Strands.
+- Components
+  - [Agent loop](https://strandsagents.com/docs/user-guide/sdk/agents/agent-loop/index.md): How Strands agents reason, plan, and act. Understand the model-driven loop that orchestrates tool use, reflection, and goal completion.
+  - [Production lifecycle controls](https://strandsagents.com/docs/user-guide/sdk/agents/lifecycle-controls/index.md): Turn limits, token budgets, timeouts, cancellation, and stop reasons that keep a production Strands agent bounded, recoverable, and safe to run at scale.
+  - [State](https://strandsagents.com/docs/user-guide/sdk/agents/state/index.md): Maintain state in Strands agents across turns and sessions: conversation history, key-value agent state, and per-request invocation state.
+  - [Storage](https://strandsagents.com/docs/user-guide/sdk/storage/index.md): Choose a storage backend and pass it to the Agent for automatic subsystem resolution, or to individual plugins for fine-grained control.
+  - [Snapshots](https://strandsagents.com/docs/user-guide/sdk/agents/snapshots/index.md): Capture and restore agent state at any point in time. Use snapshots for checkpointing, undo/redo, branching conversations, and custom persistence.
+  - [Prompts](https://strandsagents.com/docs/user-guide/sdk/agents/prompts/index.md): Write system prompts and user messages for Strands agents. Covers multi-modal prompting, direct tool calls, and prompt engineering with agent SOPs.
+  - [Hooks](https://strandsagents.com/docs/user-guide/sdk/agents/hooks/index.md): Intercept and customize agent behavior at every step. Hooks let you add logging, validation, guardrails, and custom logic to the agent loop.
+  - [Hook events](https://strandsagents.com/docs/user-guide/sdk/agents/hooks-events/index.md): Reference for every hook event a Strands agent emits: when each fires across the single-agent and multi-agent lifecycle, and which event properties you can modify.
+  - [Conversation management](https://strandsagents.com/docs/user-guide/sdk/agents/conversation-management/index.md): Keep long agent conversations within token limits using sliding window and summarizing conversation managers in the Strands Agents SDK.
+  - Context management
+    - [Overview](https://strandsagents.com/docs/user-guide/sdk/context-management/index.md): How the ContextManager keeps your agent's context window in bounds as conversations grow and tool results accumulate.
+    - [built-in-modes](https://strandsagents.com/docs/user-guide/sdk/context-management/built-in-modes/index.md): Auto and agentic context management modes with tuned defaults for most agents.
+    - [custom-strategies](https://strandsagents.com/docs/user-guide/sdk/context-management/custom-strategies/index.md): Build custom context management strategies with the Offload builder API, conditions, targets, and stash configuration.
+    - [presets](https://strandsagents.com/docs/user-guide/sdk/context-management/presets/index.md): Named strategy presets that expand to preconfigured Offload strategies for common context management patterns.
+    - [context-estimation](https://strandsagents.com/docs/user-guide/sdk/context-management/context-estimation/index.md): How the SDK estimates token counts, context window utilization, and context window limits.
+  - [Retry strategies](https://strandsagents.com/docs/user-guide/sdk/agents/retry-strategies/index.md): Handle model provider rate limits in Strands agents. Configure retry strategies with exponential backoff, custom parameters, or your own retry logic.
+  - Interrupts
+    - [Overview](https://strandsagents.com/docs/user-guide/sdk/interrupts/index.md): Pause AI agents mid-execution for human approval, input, or review. Build human-in-the-loop workflows with interrupt and resume patterns.
+    - [interrupts-multi-agent](https://strandsagents.com/docs/user-guide/sdk/interrupts-multi-agent/index.md): Pause swarm and graph orchestration for human approval or input. Raise and resume interrupts across multi-agent systems with the same interfaces as single agents.
+  - Models
+    - [model-providers](https://strandsagents.com/docs/user-guide/sdk/model-providers/index.md): Use any LLM with Strands agents. Switch between Amazon Bedrock, Anthropic, OpenAI, Ollama, and more without changing your agent code.
+    - [model-routing](https://strandsagents.com/docs/user-guide/sdk/model-providers/model-routing/index.md): Route each Strands agent invocation across multiple models with ordered fallback, request classification, custom strategies, and bounded switching.
+    - [amazon-bedrock](https://strandsagents.com/docs/user-guide/sdk/model-providers/amazon-bedrock/index.md): Use Amazon Bedrock models in Strands agents. Configure AWS credentials, model settings, guardrails, prompt caching, and multi-modal input.
+    - [amazon-bedrock-prompt-caching](https://strandsagents.com/docs/user-guide/sdk/model-providers/amazon-bedrock-prompt-caching/index.md): Cache system prompts, tools, and messages with Amazon Bedrock in Strands to cut token cost and latency, using automatic or manual cache point placement.
+    - [amazon-nova](https://strandsagents.com/docs/user-guide/sdk/model-providers/amazon-nova/index.md): Use Amazon Nova models in Strands agents with the strands-amazon-nova package. Install the provider, configure NovaAPIModel, and generate text.
+    - [anthropic](https://strandsagents.com/docs/user-guide/sdk/model-providers/anthropic/index.md): Run Strands agents on Claude models through the Anthropic API. Install the provider, configure AnthropicModel, and enable structured output and caching.
+    - [google](https://strandsagents.com/docs/user-guide/sdk/model-providers/google/index.md): Run Strands agents on Google Gemini models. Configure the provider, use built-in tools and structured output, and send image and video input.
+    - [litellm](https://strandsagents.com/docs/user-guide/sdk/model-providers/litellm/index.md): Use LiteLLM with Strands agents to access models from OpenAI, Anthropic, Amazon, and more through one API. Install and configure LiteLLMModel.
+    - [llamacpp](https://strandsagents.com/docs/user-guide/sdk/model-providers/llamacpp/index.md): Run Strands agents against a local llama.cpp server with quantized models. Configure LlamaCppModel, grammar constraints, and advanced sampling.
+    - [llamaapi](https://strandsagents.com/docs/user-guide/sdk/model-providers/llamaapi/index.md): Run Strands agents on Meta-hosted Llama models with the Llama API provider. Install, configure LlamaAPIModel, and build without managing inference.
+    - [mistral](https://strandsagents.com/docs/user-guide/sdk/model-providers/mistral/index.md): Use Mistral AI models in Strands agents. Install the Mistral provider, configure MistralModel, and run agents with tool calling and streaming.
+    - [ollama](https://strandsagents.com/docs/user-guide/sdk/model-providers/ollama/index.md): Run Strands agents on local models with Ollama. Configure OllamaModel for text generation, image understanding, tool calling, and streaming.
+    - [openai](https://strandsagents.com/docs/user-guide/sdk/model-providers/openai/index.md): Run Strands agents on OpenAI models or any OpenAI-compatible API. Install the provider, configure OpenAIModel, and enable vision and structured output.
+    - [openai-responses](https://strandsagents.com/docs/user-guide/sdk/model-providers/openai-responses/index.md): Use the OpenAI Responses API with Strands agents for built-in tools like web search and code interpreter, plus server-side conversation state.
+    - [sagemaker](https://strandsagents.com/docs/user-guide/sdk/model-providers/sagemaker/index.md): Run Strands agents against models deployed on Amazon SageMaker inference endpoints, including JumpStart models and custom fine-tuned models.
+    - [vercel](https://strandsagents.com/docs/user-guide/sdk/model-providers/vercel/index.md): Bring any Vercel AI SDK provider into Strands agents with the VercelModel adapter. Use @ai-sdk packages for OpenAI, Anthropic, Bedrock, and more.
+    - [writer](https://strandsagents.com/docs/user-guide/sdk/model-providers/writer/index.md): Use Writer Palmyra models in Strands agents. Configure WriterModel for tool calling, structured output, and domain-specific enterprise tasks.
+    - [custom_model_provider](https://strandsagents.com/docs/user-guide/sdk/model-providers/custom_model_provider/index.md): Build a custom model provider for the Strands Agents SDK. Implement the Model interface to run agents against your own LLM service.
+  - Tools
+    - [tool-results](https://strandsagents.com/docs/user-guide/sdk/tools/tool-results/index.md): The structure a Strands tool returns to the agent: the ToolResult schema, its content types, and how plain return values are converted into it.
+    - [mcp-transports](https://strandsagents.com/docs/user-guide/sdk/tools/mcp-transports/index.md): How a Strands agent reaches an MCP server: stdio for local processes, Streamable HTTP and SSE for remote servers, with OAuth and AWS IAM authentication.
+    - [executors](https://strandsagents.com/docs/user-guide/sdk/tools/executors/index.md): Control whether Strands agents run tool calls concurrently or sequentially. Covers tool executors, event ordering, cancellation, and custom executors.
+    - [community-tools-package](https://strandsagents.com/docs/user-guide/sdk/tools/community-tools-package/index.md): Understand the relationship between community tools and SDK-vended tools.
+    - [vended-tools](https://strandsagents.com/docs/user-guide/sdk/tools/vended-tools/index.md): Pre-built tools included in the SDK for common agent tasks like file operations, shell commands, HTTP requests, and persistent notes.
+  - Memory
+    - [test-memory-store](https://strandsagents.com/docs/user-guide/sdk/memory/test-memory-store/index.md): A zero-infrastructure memory store backed by a local JSON file: no cloud account, lexical recall, and memories that survive across sessions.
+    - [bedrock-knowledge-base](https://strandsagents.com/docs/user-guide/sdk/memory/bedrock-knowledge-base/index.md): Back agent memory with Amazon Bedrock Knowledge Bases: semantic search over a managed vector store and document ingestion for CUSTOM and S3 data sources.
+  - Plugins
+    - [Overview](https://strandsagents.com/docs/user-guide/sdk/plugins/index.md): Extend agent behavior with plugins. Add steering, guardrails, and custom capabilities that hook into the agent lifecycle.
+    - [skills](https://strandsagents.com/docs/user-guide/sdk/plugins/skills/index.md): Give Strands agents on-demand access to specialized instructions with the AgentSkills plugin. Progressive disclosure keeps the system prompt lean.
+    - [context-offloader](https://strandsagents.com/docs/user-guide/sdk/plugins/context-offloader/index.md): Prevent large tool results from consuming the context window. ContextOffloader stores oversized results externally and leaves retrievable references.
+    - [context-injector](https://strandsagents.com/docs/user-guide/sdk/plugins/context-injector/index.md): Fold real-time text into the model input before each call with the ContextInjector plugin: a clock, environment facts, or a lookup, not stored in history.
+    - [goal-loop](https://strandsagents.com/docs/user-guide/sdk/plugins/goal-loop/index.md): Iterative refinement plugin that validates agent responses against a goal, looping with feedback until satisfied.
+    - [custom-plugins](https://strandsagents.com/docs/user-guide/sdk/plugins/custom-plugins/index.md): Write your own Strands plugin: attach it to an agent, register hooks and tools, manage state, and initialize asynchronously.
+  - Interventions
+    - [Overview](https://strandsagents.com/docs/user-guide/sdk/agents/interventions/index.md): A composable control layer for authorization, guardrails, and steering with typed actions, ordered evaluation, and short-circuiting.
+    - [Human in the loop](https://strandsagents.com/docs/user-guide/sdk/agents/interventions/human-in-the-loop/index.md): Gate agent tool execution behind human approval. Configurable modes for CLI, web, and custom UIs with optional session trust.
+    - [cedar-authorization](https://strandsagents.com/docs/user-guide/sdk/agents/interventions/cedar-authorization/index.md): Control which tools an agent can invoke using Cedar policies. Enforce identity-aware access control, role-based permissions, and rate limits at the tool-call boundary.
+    - [steering](https://strandsagents.com/docs/user-guide/sdk/agents/interventions/steering/index.md): Guide agents with just-in-time contextual feedback instead of front-loaded prompts. Python uses plugins; TypeScript uses the interventions framework.
+  - Sandbox
+    - [Overview](https://strandsagents.com/docs/user-guide/sdk/sandbox/index.md): Configure where an agent runs shell commands, executes code, and accesses a filesystem. Swap between Docker, SSH, or custom environments.
+    - [available-sandboxes](https://strandsagents.com/docs/user-guide/sdk/sandbox/available-sandboxes/index.md): Use the built-in Docker and SSH sandboxes, drive a sandbox from your own code, and stream output from long-running commands.
+    - [custom-sandbox](https://strandsagents.com/docs/user-guide/sdk/sandbox/custom-sandbox/index.md): Target an execution environment the built-in sandboxes do not cover: extend PosixShellSandbox or implement the Sandbox interface directly.
+  - Multi-agent
+    - [agent-to-agent](https://strandsagents.com/docs/user-guide/sdk/multi-agent/agent-to-agent/index.md): Connect Strands agents across platforms with the Agent-to-Agent (A2A) protocol. Serve agents over A2A and call remote agents from your own.
+    - [a2a-server-configuration](https://strandsagents.com/docs/user-guide/sdk/multi-agent/a2a-server-configuration/index.md): Reference for configuring a Strands A2A server: constructor options, custom task stores and request-handler components, and path-based mounting for load-balanced deployments.
+    - [agents-as-tools](https://strandsagents.com/docs/user-guide/sdk/multi-agent/agents-as-tools/index.md): Wrap specialized Strands agents as callable tools so an orchestrator agent can delegate tasks to domain experts in a hierarchical pattern.
+    - [swarm](https://strandsagents.com/docs/user-guide/sdk/multi-agent/swarm/index.md): Build self-organizing agent teams with the Strands Swarm pattern. Agents collaborate through autonomous handoffs, shared context, and working memory.
+    - [graph](https://strandsagents.com/docs/user-guide/sdk/multi-agent/graph/index.md): Orchestrate multi-agent systems with the Strands Graph pattern: deterministic DAG or cyclic execution, conditional edges, and nested agents.
+    - [graph-components](https://strandsagents.com/docs/user-guide/sdk/multi-agent/graph-components/index.md): Reference for the Strands Graph building blocks: GraphNode, GraphEdge, and GraphBuilder in Python, and the node, edge, and constructor types in TypeScript.
+    - [workflow](https://strandsagents.com/docs/user-guide/sdk/multi-agent/workflow/index.md): Coordinate multiple AI agents in sequential workflows with Strands. Define tasks, manage dependencies, and pass context between specialized agents.
+  - Streaming
+    - [async-iterators](https://strandsagents.com/docs/user-guide/sdk/streaming/async-iterators/index.md): Stream Strands agent events asynchronously with async iterators. Process text, tool usage, and lifecycle events in FastAPI and other async frameworks.
+    - [callback-handlers](https://strandsagents.com/docs/user-guide/sdk/streaming/callback-handlers/index.md): Intercept Strands agent events in Python with callback handlers. Monitor streaming text and tool usage in real time or format custom output.
+    - [events](https://strandsagents.com/docs/user-guide/sdk/streaming/events/index.md): Reference for every event a Strands agent stream emits: lifecycle, model output, tool activity, and multi-agent coordination events, plus how to serialize them.
+  - Realtime
+    - [Overview](https://strandsagents.com/docs/user-guide/sdk/bidirectional-streaming/index.md): Build a realtime agent that streams audio in and out: a persistent BidiAgent connection, a realtime model provider, and the events, I/O, and barge-ins a live conversation needs.
+    - [agent](https://strandsagents.com/docs/user-guide/sdk/bidirectional-streaming/agent/index.md): Build real-time voice conversations with BidiAgent. Stream audio and text over persistent connections with barge-ins and concurrent tool calling.
+    - [bedrock](https://strandsagents.com/docs/user-guide/sdk/bidirectional-streaming/models/bedrock/index.md): Build real-time speech-to-speech agents with Amazon Bedrock Nova Sonic and Strands. Bidirectional audio streaming with barge-in handling and tool calling.
+    - [google](https://strandsagents.com/docs/user-guide/sdk/bidirectional-streaming/models/google/index.md): Build real-time voice agents with Google's Gemini Live API and Strands. Stream audio and text over WebSocket with barge-ins and tool calling.
+    - [openai](https://strandsagents.com/docs/user-guide/sdk/bidirectional-streaming/models/openai/index.md): Build low-latency voice agents with the OpenAI Realtime API and Strands. Configure speech-to-speech streaming, barge-ins, and tool calling.
+    - [io](https://strandsagents.com/docs/user-guide/sdk/bidirectional-streaming/io/index.md): Connect microphones, speakers, consoles, and WebSockets to a Strands bidi-agent with input and output streams for audio and text.
+    - [events](https://strandsagents.com/docs/user-guide/sdk/bidirectional-streaming/events/index.md): Send and receive bidirectional streaming events in Strands agents. Process audio, text, and tool activity in real time over persistent connections.
+    - [barge-in](https://strandsagents.com/docs/user-guide/sdk/bidirectional-streaming/barge-in/index.md): Handle real-time voice barge-ins in BidiAgent. Voice Activity Detection stops responses mid-stream for natural, human-like conversations.
+    - [hooks](https://strandsagents.com/docs/user-guide/sdk/bidirectional-streaming/hooks/index.md): Extend BidiAgent with hooks for bidirectional streaming events: connection lifecycle, barge-ins, restarts, and real-time conversation logging.
+    - [session-management](https://strandsagents.com/docs/user-guide/sdk/bidirectional-streaming/session-management/index.md): Persist BidiAgent conversation history and state across bidirectional streaming sessions so voice assistants resume where they left off.
+    - [observability](https://strandsagents.com/docs/user-guide/sdk/bidirectional-streaming/observability/index.md): Trace, measure, and log BidiAgent sessions: connection lifecycle, time to first audio, barge-ins, per-modality token usage, and reconnects.
+  - Experimental
+    - [agent-config](https://strandsagents.com/docs/user-guide/sdk/experimental/agent-config/index.md): Create Strands agents from JSON files or dictionaries with the experimental config_to_agent function, including tool loading and model settings.
+- Reference
+  - [API reference](https://strandsagents.com/docs/api/python/index.md): The full API reference for the Strands Agents Python SDK: every class, method, tool, model provider, and hook with complete signatures.
+  - [API reference](https://strandsagents.com/docs/api/typescript/index.md): The full API reference for the Strands Agents TypeScript SDK: every class, interface, function, and type across the SDK packages.
+
+## Shell
+
+- Get started
+  - [Overview](https://strandsagents.com/docs/user-guide/shell/index.md): Strands Shell is an in-process shell sandbox that gives agents a fast, isolated command line with filesystem, network, and credential mediation built in.
+  - [quickstart](https://strandsagents.com/docs/user-guide/shell/quickstart/index.md): Install Strands Shell and run your first sandboxed command through the MCP server, the Python API, or the Node.js API in just a few minutes.
+  - [how-it-works](https://strandsagents.com/docs/user-guide/shell/how-it-works/index.md): Why Strands Shell isolates at the process instead of the kernel, how the Kernel boundary and shell engine fit together, and where that tradeoff holds.
+- Guides
+  - [Configure the sandbox](https://strandsagents.com/docs/user-guide/shell/configuration/index.md): Bind host directories, inject credentials per URL, set the network allowlist, and tune resource limits for Strands Shell, in code or from a TOML file.
+  - [Run the MCP server](https://strandsagents.com/docs/user-guide/shell/mcp-server/index.md): Expose Strands Shell to any MCP-compatible agent over stdio, with four sandboxed tools and optional nested MCP servers surfaced as Lua modules.
+  - [Inspect the configuration](https://strandsagents.com/docs/user-guide/shell/inspecting-configuration/index.md): Read back how a Strands Shell was configured (binds, credentials, allowlist, limits) from a read-only snapshot that never exposes credential secrets.
+- Components
+  - [Commands](https://strandsagents.com/docs/user-guide/shell/commands/index.md): The full command inventory in Strands Shell, with supported flags, shell builtins, and known divergences from GNU and BSD coreutils behavior.
+  - [Shell language and builtins](https://strandsagents.com/docs/user-guide/shell/shell-language/index.md): The shell language Strands Shell supports (pipelines, redirections, control flow, expansions) and its builtins, with the behaviors that diverge from Bash.
+  - [Lua scripting](https://strandsagents.com/docs/user-guide/shell/lua-scripting/index.md): Run sandboxed Lua 5.4 inside Strands Shell for multi-step transforms and structured data, and call nested MCP servers as Lua modules from a script.
+- Security
+  - [Security model](https://strandsagents.com/docs/user-guide/shell/security/index.md): How the Kernel boundary mediates filesystem, network, and credential access, what Strands Shell guarantees, and when to add OS-level isolation.
+- Reference
+  - [Reference](https://strandsagents.com/docs/user-guide/shell/reference/index.md): The one place to look up Strands Shell's surface, the command-line interface, the Python and Node.js API, the command inventory, the configuration and TOML schema, and the MCP server tools.
+
+## Evals SDK
+
+- Get started
+  - [Overview](https://strandsagents.com/docs/user-guide/evals-sdk/index.md): Validate your agent before you ship: evaluators, detectors, red teaming, and simulators in one SDK.
+  - [quickstart](https://strandsagents.com/docs/user-guide/evals-sdk/quickstart/index.md): Run your first Strands evaluation: install the SDK, write an experiment, score an agent with a built-in evaluator, and read the results.
+  - [how-evaluation-works](https://strandsagents.com/docs/user-guide/evals-sdk/how-evaluation-works/index.md): Understand how a Strands evaluation fits together: an experiment of cases, a task that produces output, evaluators that score it, and detectors that diagnose.
+  - [Evaluate with AI](https://strandsagents.com/docs/user-guide/evals-sdk/eval-sop/index.md): Point an AI assistant at your agent and it runs the whole evaluation: plan, generate test data, score with the Evals SDK, and write a report.
+- Build guides
+  - [experiment_generator](https://strandsagents.com/docs/user-guide/evals-sdk/experiment_generator/index.md): Generate evaluation experiments automatically with ExperimentGenerator: LLM-created test cases, rubrics, and topic-based coverage for your agent.
+  - [topic_planning](https://strandsagents.com/docs/user-guide/evals-sdk/topic_planning/index.md): Distribute generated test cases across diverse, non-overlapping topics with num_topics or the TopicPlanner utility for broad agent coverage.
+- Run guides
+  - [eval_task](https://strandsagents.com/docs/user-guide/evals-sdk/how-to/eval_task/index.md): Write evaluation task functions with the @eval_task decorator, which handles telemetry, session mapping, and result normalization for you.
+  - [result_caching](https://strandsagents.com/docs/user-guide/evals-sdk/how-to/result_caching/index.md): Cache task execution results with EvaluationDataStore so you can iterate on evaluators without re-invoking expensive or slow agent calls.
+  - [experiment_management](https://strandsagents.com/docs/user-guide/evals-sdk/how-to/experiment_management/index.md): Organize evaluation test cases into experiments: use metadata for filtering, group related cases, and adapt experiments across agent versions.
+  - [serialization](https://strandsagents.com/docs/user-guide/evals-sdk/how-to/serialization/index.md): Save, load, version, and share evaluation work with JSON serialization for Strands Evals experiments and evaluation reports.
+  - [trace_providers](https://strandsagents.com/docs/user-guide/evals-sdk/how-to/trace_providers/index.md): Evaluate production agent traces without re-running them: fetch execution data from CloudWatch, Langfuse, or OpenSearch with trace providers.
+  - [agentcore_evaluation_dashboard](https://strandsagents.com/docs/user-guide/evals-sdk/how-to/agentcore_evaluation_dashboard/index.md): Evaluate Strands agents with Amazon Bedrock AgentCore Evaluations: managed evaluators, online and on-demand evaluation, and CloudWatch dashboards.
+- Components
+  - Evaluators
+    - [Overview](https://strandsagents.com/docs/user-guide/evals-sdk/evaluators/index.md): Choose and run a Strands evaluator: LLM-judge and deterministic scorers for output quality, safety, multimodal, and agentic behavior.
+    - Quality
+      - [output_evaluator](https://strandsagents.com/docs/user-guide/evals-sdk/evaluators/output_evaluator/index.md): Score agent responses against a custom rubric with OutputEvaluator, an LLM-as-a-judge evaluator for safety, relevance, accuracy, and completeness.
+      - [trajectory_evaluator](https://strandsagents.com/docs/user-guide/evals-sdk/evaluators/trajectory_evaluator/index.md): Judge the sequence of tool calls and actions an agent took with TrajectoryEvaluator, including exact, in-order, and any-order matching tools.
+      - [interactions_evaluator](https://strandsagents.com/docs/user-guide/evals-sdk/evaluators/interactions_evaluator/index.md): Evaluate multi-agent workflows step by step with InteractionsEvaluator, scoring each interaction with node-specific rubrics and dependencies.
+      - [helpfulness_evaluator](https://strandsagents.com/docs/user-guide/evals-sdk/evaluators/helpfulness_evaluator/index.md): Measure how helpful agent responses are from the user's perspective with HelpfulnessEvaluator and its seven-level scoring scale.
+      - [faithfulness_evaluator](https://strandsagents.com/docs/user-guide/evals-sdk/evaluators/faithfulness_evaluator/index.md): Detect hallucinations with FaithfulnessEvaluator by checking whether agent statements stay grounded in the preceding conversation history.
+      - [correctness_evaluator](https://strandsagents.com/docs/user-guide/evals-sdk/evaluators/correctness_evaluator/index.md): Check the factual correctness of agent responses with CorrectnessEvaluator, from conversation context alone or against an expected reference answer.
+      - [coherence_evaluator](https://strandsagents.com/docs/user-guide/evals-sdk/evaluators/coherence_evaluator/index.md): Assess the logical consistency and flow of agent responses with CoherenceEvaluator, an LLM judge with a five-level scoring rubric.
+      - [conciseness_evaluator](https://strandsagents.com/docs/user-guide/evals-sdk/evaluators/conciseness_evaluator/index.md): Catch verbose agent responses with ConcisenessEvaluator, which scores how efficiently a response communicates on a three-level scale.
+      - [response_relevance_evaluator](https://strandsagents.com/docs/user-guide/evals-sdk/evaluators/response_relevance_evaluator/index.md): Verify agent responses address what the user actually asked with ResponseRelevanceEvaluator and its five-level relevance scale.
+    - Safety
+      - [harmfulness_evaluator](https://strandsagents.com/docs/user-guide/evals-sdk/evaluators/harmfulness_evaluator/index.md): Screen agent responses for dangerous or offensive content with the binary harmful or not-harmful classification of HarmfulnessEvaluator.
+      - [refusal_evaluator](https://strandsagents.com/docs/user-guide/evals-sdk/evaluators/refusal_evaluator/index.md): Detect when an agent refuses a user request with RefusalEvaluator, which separates true refusals from merely irrelevant responses.
+      - [stereotyping_evaluator](https://strandsagents.com/docs/user-guide/evals-sdk/evaluators/stereotyping_evaluator/index.md): Flag biased or stereotypical content in agent responses with StereotypingEvaluator, including stereotypes the response later rejects.
+    - Multimodal
+      - [multimodal_output_evaluator](https://strandsagents.com/docs/user-guide/evals-sdk/evaluators/multimodal_output_evaluator/index.md): Evaluate agent outputs on image and document tasks with MultimodalOutputEvaluator, which judges responses against a custom rubric using an MLLM.
+      - [multimodal_overall_quality_evaluator](https://strandsagents.com/docs/user-guide/evals-sdk/evaluators/multimodal_overall_quality_evaluator/index.md): Score overall response quality on image tasks with MultimodalOverallQualityEvaluator: visual accuracy, instruction adherence, and coherence.
+      - [multimodal_correctness_evaluator](https://strandsagents.com/docs/user-guide/evals-sdk/evaluators/multimodal_correctness_evaluator/index.md): Fact-check agent responses against image content with MultimodalCorrectnessEvaluator: objects, counts, colors, positions, and readable text.
+      - [multimodal_faithfulness_evaluator](https://strandsagents.com/docs/user-guide/evals-sdk/evaluators/multimodal_faithfulness_evaluator/index.md): Catch visual hallucinations with MultimodalFaithfulnessEvaluator, which checks agent responses for invented details not grounded in the image.
+      - [multimodal_instruction_following_evaluator](https://strandsagents.com/docs/user-guide/evals-sdk/evaluators/multimodal_instruction_following_evaluator/index.md): Verify responses on image tasks satisfy explicit constraints like count, format, and scope with MultimodalInstructionFollowingEvaluator.
+    - Agentic
+      - [instruction_following_evaluator](https://strandsagents.com/docs/user-guide/evals-sdk/evaluators/instruction_following_evaluator/index.md): Evaluate whether agent responses comply with explicit prompt instructions using the binary scoring of InstructionFollowingEvaluator.
+      - [goal_success_rate_evaluator](https://strandsagents.com/docs/user-guide/evals-sdk/evaluators/goal_success_rate_evaluator/index.md): Determine whether an agent accomplished all user goals across an entire conversation session with the GoalSuccessRateEvaluator's binary score.
+      - [failure_communication_evaluator](https://strandsagents.com/docs/user-guide/evals-sdk/evaluators/failure_communication_evaluator/index.md): Rate how clearly your agent explains tool failures to users with FailureCommunicationEvaluator: clarity, actionability, transparency, and tone.
+      - [partial_completion_evaluator](https://strandsagents.com/docs/user-guide/evals-sdk/evaluators/partial_completion_evaluator/index.md): Measure the fraction of a user goal an agent achieved with PartialCompletionEvaluator, a continuous 0.0 to 1.0 score for multi-step tasks.
+      - [recovery_strategy_evaluator](https://strandsagents.com/docs/user-guide/evals-sdk/evaluators/recovery_strategy_evaluator/index.md): Score how well an agent recovers from tool failures with RecoveryStrategyEvaluator: alternative approaches, retries, and strategy variation.
+      - [tool_selection_evaluator](https://strandsagents.com/docs/user-guide/evals-sdk/evaluators/tool_selection_evaluator/index.md): Check that your agent picks the right tool at the right time with ToolSelectionAccuracyEvaluator, which judges each tool call in context.
+      - [tool_parameter_evaluator](https://strandsagents.com/docs/user-guide/evals-sdk/evaluators/tool_parameter_evaluator/index.md): Verify tool call parameters are grounded in conversation context, not hallucinated, with per-call checks from ToolParameterAccuracyEvaluator.
+    - Skill
+      - [skill_selection_accuracy_evaluator](https://strandsagents.com/docs/user-guide/evals-sdk/evaluators/skill_selection_accuracy_evaluator/index.md): Judge whether each skill your agent chose to load was the right call with SkillSelectionAccuracyEvaluator, one binary verdict per invoked skill.
+      - [skill_instruction_following_evaluator](https://strandsagents.com/docs/user-guide/evals-sdk/evaluators/skill_instruction_following_evaluator/index.md): Measure how fully your agent followed each invoked skill's steps with SkillInstructionFollowingEvaluator, a five-point rating grounded in per-step evidence.
+    - [Deterministic](https://strandsagents.com/docs/user-guide/evals-sdk/evaluators/deterministic_evaluators/index.md): Run fast, code-based checks without LLM judges: deterministic evaluators match outputs, verify tool calls, and compare state for CI/CD pipelines.
+    - [Custom](https://strandsagents.com/docs/user-guide/evals-sdk/evaluators/custom_evaluator/index.md): Build domain-specific evaluation logic by extending the Evaluator base class: custom scoring, external services, and specialized data analysis.
+  - Detectors
+    - [Overview](https://strandsagents.com/docs/user-guide/evals-sdk/detectors/index.md): Find out why your agent failed: detectors analyze execution traces to detect failures, classify root causes, and recommend concrete fixes.
+    - [failure_detection](https://strandsagents.com/docs/user-guide/evals-sdk/detectors/failure_detection/index.md): Detect semantic failures in agent traces with detect_failures: hallucinations, tool misuse, and policy violations across a 20+ category taxonomy.
+    - [root_cause_analysis](https://strandsagents.com/docs/user-guide/evals-sdk/detectors/root_cause_analysis/index.md): Trace failure chains in agent sessions with analyze_root_cause: classify causality, assess propagation impact, and get fix recommendations.
+    - [diagnosis](https://strandsagents.com/docs/user-guide/evals-sdk/detectors/diagnosis/index.md): Run the full failure diagnosis pipeline with diagnose_session: detect failures, analyze root causes, and get deduplicated fix recommendations.
+  - Simulators
+    - [Overview](https://strandsagents.com/docs/user-guide/evals-sdk/simulators/index.md): Evaluate agents with dynamic simulators that drive multi-turn conversations and generate realistic tool responses beyond static test cases.
+    - [user_simulation](https://strandsagents.com/docs/user-guide/evals-sdk/simulators/user_simulation/index.md): Simulate realistic end users with ActorSimulator to evaluate agents in dynamic, goal-oriented multi-turn conversations without scripted inputs.
+    - [customize_user_simulation](https://strandsagents.com/docs/user-guide/evals-sdk/simulators/customize_user_simulation/index.md): Customize ActorSimulator user simulations with custom actor profiles, system prompts, additional tools, and alternative models for evaluation.
+    - [tool_simulation](https://strandsagents.com/docs/user-guide/evals-sdk/simulators/tool_simulation/index.md): Replace real tool execution with LLM-generated, schema-validated responses using ToolSimulator to evaluate agents without live infrastructure.
+  - Red teaming
+    - [Overview](https://strandsagents.com/docs/user-guide/evals-sdk/red-teaming/index.md): Probe a Strands agent's safety by running adversarial attack strategies against it and scoring whether each attack breached its guardrails.
+    - [quickstart](https://strandsagents.com/docs/user-guide/evals-sdk/red-teaming/quickstart/index.md): Run an adversarial red-team experiment against a Strands agent end to end, generating attack cases, running a strategy, and reading which attacks breached.
+    - [strategies](https://strandsagents.com/docs/user-guide/evals-sdk/red-teaming/strategies/index.md): The built-in red-team attack strategies (Crescendo, GOAT, PAIR, Bad Likert Judge, SequentialBreak), their parameters, and when to use each.
+    - [custom_cases](https://strandsagents.com/docs/user-guide/evals-sdk/red-teaming/custom_cases/index.md): Hand-author RedTeamCase objects for domain-specific red-team risks, and write success_criteria the LLM judge can apply reliably.
+    - [evaluators](https://strandsagents.com/docs/user-guide/evals-sdk/red-teaming/evaluators/index.md): How AttackSuccessEvaluator scores a red-team attack from 0.0 to 1.0, what counts as a breach, and how to tune the threshold.
+    - [reading_the_report](https://strandsagents.com/docs/user-guide/evals-sdk/red-teaming/reading_the_report/index.md): Understand what a RedTeamReport prints, how to read the breach matrix and per-attack table, and what to do when an attack breaches.
+  - [chaos_testing](https://strandsagents.com/docs/user-guide/evals-sdk/chaos_testing/index.md): Test agent resilience by injecting controlled tool failures with ChaosPlugin: simulate timeouts, network errors, and corrupted responses safely.
+- CLI
+  - [Overview](https://strandsagents.com/docs/user-guide/evals-sdk/cli/index.md): Run agent evaluations from the command line with strands-evals: execute experiments, generate test cases, render reports, and diagnose failures in CI.
+  - [run](https://strandsagents.com/docs/user-guide/evals-sdk/cli/run/index.md): Execute an evaluation experiment or a one-off ad-hoc case from the command line with strands-evals run: agent factories, caching, and CI exit codes.
+  - [generate](https://strandsagents.com/docs/user-guide/evals-sdk/cli/generate/index.md): Generate evaluation experiments from the command line with strands-evals generate: LLM-created test cases from a context description, with or without topics.
+  - [diagnose](https://strandsagents.com/docs/user-guide/evals-sdk/cli/diagnose/index.md): Detect failures and analyze root causes from the command line: strands-evals diagnose scores a Session JSON, and fetch pulls one from a trace provider.
+  - [report](https://strandsagents.com/docs/user-guide/evals-sdk/cli/report/index.md): Render evaluation reports and schema-check experiment files from the command line with strands-evals report and validate, including stdin piping for CI.
+
+## Contribute
+
+- [contribute](https://strandsagents.com/docs/contribute/index.md): Ways to contribute to the Strands Agents ecosystem: fix bugs in the core SDK, improve the documentation, or build and publish extensions.
+- Contribution Types
+  - [core-sdk](https://strandsagents.com/docs/contribute/contributing/core-sdk/index.md): Contribute to the Strands core SDK for Python and TypeScript: find open issues, set up your development environment, and submit changes for review.
+  - [documentation](https://strandsagents.com/docs/contribute/contributing/documentation/index.md): Contribute to Strands Agents documentation: run the Astro site locally, use the docs agent skills, and submit anything from typo fixes to new guides.
+  - [feature-proposals](https://strandsagents.com/docs/contribute/contributing/feature-proposals/index.md): Propose significant features for the Strands Harness SDK: when to write a design document, what to include, and how the review process works.
+  - [extensions](https://strandsagents.com/docs/contribute/contributing/extensions/index.md): Package and publish your own Strands components: share tools, model providers, and session managers so other developers can install them.
+
+## Community
+
+- Labs
+  - [labs](https://strandsagents.com/docs/labs/index.md): Explore Strands Labs, the experimental arm of Strands Agents: open source projects covering robotics, world models, agentic benchmarks, harness optimization, and audio processing.
+- Learning
+  - [Lesson 1: How Agents Really Work](https://strandsagents.com/docs/learning/how-agents-really-work/index.md): A ground-up look at the agent loop: how a model, a set of tools, and a running context combine to let an agent reason, act, and observe until a task is done.
+  - [Lesson 2: Switching Model Providers](https://strandsagents.com/docs/learning/switching-model-providers/index.md): This covers model providers: how Strands abstracts the underlying LLM so your agent logic stays the same regardless of which model you're calling.
+  - [Lesson 3: Give Your Agent Tools Using MCP](https://strandsagents.com/docs/learning/give-your-agent-tools-using-mcp/index.md): This chapter covers MCP and how it changes the way you think about equipping your agent with capabilities.
+  - [Lesson 4: Adding Callbacks & Response Streaming](https://strandsagents.com/docs/learning/adding-callbacks-and-response-streaming/index.md): This chapter is about making the agent's work visible while it's happening, not just dumping a final answer after 15 seconds of silence.
+  - [Lesson 5: Control Your Agent With Hooks](https://strandsagents.com/docs/learning/control-your-agent-with-hooks/index.md): Hooks fire at the same event points as callbacks (before/after tool calls, before/after model calls, cycle boundaries) but they can modify or cancel what's about to happen.
+  - [Lesson 6: Agent Plugins & Skills](https://strandsagents.com/docs/learning/agent-plugins-and-skills/index.md): Individual tools solve individual problems. But some capabilities require multiple tools working together with specific hooks and prompt instructions to function correctly. That's what a plugin is: a packaged bundle of tools + hooks + system prompt additions that you attach to an agent as a unit.
+  - [Lesson 7: Improve Agent Reliability With Strands Steering](https://strandsagents.com/docs/learning/improve-agent-reliability-with-strands-steering/index.md): System prompts set the agent's general personality and rules, but they're blunt. You can't easily say 'only for this next tool call, format the output as JSON' or 'when the user mentions billing, always check their account status first' without bloating the prompt with conditionals the model has to parse every single turn.
+  - [Lesson 8: Context Engineering & Conversation Management](https://strandsagents.com/docs/learning/context-engineering-and-conversation-management/index.md): Every turn, the model receives the full conversation history plus system prompt plus tool results. That window fills up fast. Once it does, you either hit token limits, start paying significantly more per request, or the model starts missing information buried in the middle.
+  - [Lesson 9: Persistent Memory With Session Managers](https://strandsagents.com/docs/learning/persistent-memory-with-session-managers/index.md): Without persistence, every conversation starts from zero. The agent has no memory of prior interactions, no accumulated knowledge about the user, no awareness of decisions made yesterday. Session managers handle the storage and retrieval of conversation state so continuity works automatically.
+  - [Lesson 10: Multi-Agent Patterns: Agents as Tools](https://strandsagents.com/docs/learning/multi-agent-patterns-agents-as-tools/index.md): This is where we cross from single-agent patterns into multi-agent orchestration, and we start with the most intuitive version: an agent that can call other agents the same way it calls any other tool.
+  - [Lesson 11: Multi-Agent Patterns: Graph Workflows](https://strandsagents.com/docs/learning/multi-agent-patterns-graph-workflows/index.md): Some workflows have a fixed structure: step A feeds into step B, step B branches based on a condition, both branches converge at step C. You don't want the model deciding whether to run step B. You want it guaranteed.
+  - [Lesson 12: Multi-Agent Patterns: Agent Swarms](https://strandsagents.com/docs/learning/multi-agent-patterns-agent-swarms/index.md): In a swarm, multiple agents share a workspace or communication channel. Each agent has its own tools, its own prompt, its own specialization.
+  - [Lesson 13: Evaluating Agents](https://strandsagents.com/docs/learning/evaluating-agents/index.md): Agent evaluation is harder than traditional software testing. The output is non-deterministic.
+  - [Lesson 14: Deploying Agents to the Cloud](https://strandsagents.com/docs/learning/deploying-agents-to-the-cloud/index.md): We'll deploy an agent to AWS using Amazon Bedrock AgentCore. AgentCore is a collection of components for building, deploying and operating agents in production. The main components we will focus on in this video is AgentCore Runtime and AgentCore Memory.
+
+## Api Python
+
+- [strands.agent.a2a_agent](https://strandsagents.com/docs/api/python/strands.agent.a2a_agent/index.md)
+- [strands.agent.agent](https://strandsagents.com/docs/api/python/strands.agent.agent/index.md)
+- [strands.agent.agent_metadata](https://strandsagents.com/docs/api/python/strands.agent.agent_metadata/index.md)
+- [strands.agent.agent_result](https://strandsagents.com/docs/api/python/strands.agent.agent_result/index.md)
+- [strands.agent.base](https://strandsagents.com/docs/api/python/strands.agent.base/index.md)
+- [strands.agent.conversation_manager.compression.context_compression](https://strandsagents.com/docs/api/python/strands.agent.conversation_manager.compression.context_compression/index.md)
+- [strands.agent.conversation_manager.compression.pin_message](https://strandsagents.com/docs/api/python/strands.agent.conversation_manager.compression.pin_message/index.md)
+- [strands.agent.conversation_manager.conversation_manager](https://strandsagents.com/docs/api/python/strands.agent.conversation_manager.conversation_manager/index.md)
+- [strands.agent.conversation_manager.null_conversation_manager](https://strandsagents.com/docs/api/python/strands.agent.conversation_manager.null_conversation_manager/index.md)
+- [strands.agent.conversation_manager.sliding_window_conversation_manager](https://strandsagents.com/docs/api/python/strands.agent.conversation_manager.sliding_window_conversation_manager/index.md)
+- [strands.agent.conversation_manager.summarizing_conversation_manager](https://strandsagents.com/docs/api/python/strands.agent.conversation_manager.summarizing_conversation_manager/index.md)
+- [strands.event_loop.event_loop](https://strandsagents.com/docs/api/python/strands.event_loop.event_loop/index.md)
+- [strands.event_loop.streaming](https://strandsagents.com/docs/api/python/strands.event_loop.streaming/index.md)
+- [strands.experimental.agent_config](https://strandsagents.com/docs/api/python/strands.experimental.agent_config/index.md)
+- [strands.experimental.bidi.agent](https://strandsagents.com/docs/api/python/strands.experimental.bidi.agent/index.md)
+- [strands.experimental.bidi.hooks](https://strandsagents.com/docs/api/python/strands.experimental.bidi.hooks/index.md)
+- [strands.experimental.bidi.io](https://strandsagents.com/docs/api/python/strands.experimental.bidi.io/index.md)
+- [strands.experimental.bidi.models](https://strandsagents.com/docs/api/python/strands.experimental.bidi.models/index.md)
+- [strands.experimental.bidi.tools](https://strandsagents.com/docs/api/python/strands.experimental.bidi.tools/index.md)
+- [strands.experimental.bidi.types](https://strandsagents.com/docs/api/python/strands.experimental.bidi.types/index.md)
+- [strands.experimental.checkpoint.checkpoint](https://strandsagents.com/docs/api/python/strands.experimental.checkpoint.checkpoint/index.md)
+- [strands.experimental.tools.stop.stop](https://strandsagents.com/docs/api/python/strands.experimental.tools.stop.stop/index.md)
+- [strands.handlers.callback_handler](https://strandsagents.com/docs/api/python/strands.handlers.callback_handler/index.md)
+- [strands.hooks.events](https://strandsagents.com/docs/api/python/strands.hooks.events/index.md)
+- [strands.hooks.registry](https://strandsagents.com/docs/api/python/strands.hooks.registry/index.md)
+- [strands.injection.types](https://strandsagents.com/docs/api/python/strands.injection.types/index.md)
+- [strands.interrupt](https://strandsagents.com/docs/api/python/strands.interrupt/index.md)
+- [strands.interventions.actions](https://strandsagents.com/docs/api/python/strands.interventions.actions/index.md)
+- [strands.interventions.handler](https://strandsagents.com/docs/api/python/strands.interventions.handler/index.md)
+- [strands.interventions.registry](https://strandsagents.com/docs/api/python/strands.interventions.registry/index.md)
+- [strands.memory.extraction.coordinator](https://strandsagents.com/docs/api/python/strands.memory.extraction.coordinator/index.md)
+- [strands.memory.extraction.model_extractor](https://strandsagents.com/docs/api/python/strands.memory.extraction.model_extractor/index.md)
+- [strands.memory.extraction.triggers](https://strandsagents.com/docs/api/python/strands.memory.extraction.triggers/index.md)
+- [strands.memory.extraction.types](https://strandsagents.com/docs/api/python/strands.memory.extraction.types/index.md)
+- [strands.memory.memory_manager](https://strandsagents.com/docs/api/python/strands.memory.memory_manager/index.md)
+- [strands.memory.types](https://strandsagents.com/docs/api/python/strands.memory.types/index.md)
+- [strands.models](https://strandsagents.com/docs/api/python/strands.models/index.md)
+- [strands.models.anthropic](https://strandsagents.com/docs/api/python/strands.models.anthropic/index.md)
+- [strands.models.bedrock](https://strandsagents.com/docs/api/python/strands.models.bedrock/index.md)
+- [strands.models.gemini](https://strandsagents.com/docs/api/python/strands.models.gemini/index.md)
+- [strands.models.litellm](https://strandsagents.com/docs/api/python/strands.models.litellm/index.md)
+- [strands.models.llamaapi](https://strandsagents.com/docs/api/python/strands.models.llamaapi/index.md)
+- [strands.models.llamacpp](https://strandsagents.com/docs/api/python/strands.models.llamacpp/index.md)
+- [strands.models.mistral](https://strandsagents.com/docs/api/python/strands.models.mistral/index.md)
+- [strands.models.model](https://strandsagents.com/docs/api/python/strands.models.model/index.md)
+- [strands.models.ollama](https://strandsagents.com/docs/api/python/strands.models.ollama/index.md)
+- [strands.models.openai](https://strandsagents.com/docs/api/python/strands.models.openai/index.md)
+- [strands.models.openai_responses](https://strandsagents.com/docs/api/python/strands.models.openai_responses/index.md)
+- [strands.models.routing.classifier_strategy](https://strandsagents.com/docs/api/python/strands.models.routing.classifier_strategy/index.md)
+- [strands.models.routing.fallback_strategy](https://strandsagents.com/docs/api/python/strands.models.routing.fallback_strategy/index.md)
+- [strands.models.routing.router](https://strandsagents.com/docs/api/python/strands.models.routing.router/index.md)
+- [strands.models.routing.strategy](https://strandsagents.com/docs/api/python/strands.models.routing.strategy/index.md)
+- [strands.models.sagemaker](https://strandsagents.com/docs/api/python/strands.models.sagemaker/index.md)
+- [strands.models.writer](https://strandsagents.com/docs/api/python/strands.models.writer/index.md)
+- [strands.multiagent.a2a.executor](https://strandsagents.com/docs/api/python/strands.multiagent.a2a.executor/index.md)
+- [strands.multiagent.a2a.server](https://strandsagents.com/docs/api/python/strands.multiagent.a2a.server/index.md)
+- [strands.multiagent.base](https://strandsagents.com/docs/api/python/strands.multiagent.base/index.md)
+- [strands.multiagent.graph](https://strandsagents.com/docs/api/python/strands.multiagent.graph/index.md)
+- [strands.multiagent.swarm](https://strandsagents.com/docs/api/python/strands.multiagent.swarm/index.md)
+- [strands.plugins.decorator](https://strandsagents.com/docs/api/python/strands.plugins.decorator/index.md)
+- [strands.plugins.multiagent_plugin](https://strandsagents.com/docs/api/python/strands.plugins.multiagent_plugin/index.md)
+- [strands.plugins.multiagent_registry](https://strandsagents.com/docs/api/python/strands.plugins.multiagent_registry/index.md)
+- [strands.plugins.plugin](https://strandsagents.com/docs/api/python/strands.plugins.plugin/index.md)
+- [strands.plugins.registry](https://strandsagents.com/docs/api/python/strands.plugins.registry/index.md)
+- [strands.sandbox.base](https://strandsagents.com/docs/api/python/strands.sandbox.base/index.md)
+- [strands.sandbox.constants](https://strandsagents.com/docs/api/python/strands.sandbox.constants/index.md)
+- [strands.sandbox.docker](https://strandsagents.com/docs/api/python/strands.sandbox.docker/index.md)
+- [strands.sandbox.errors](https://strandsagents.com/docs/api/python/strands.sandbox.errors/index.md)
+- [strands.sandbox.not_a_sandbox_local_environment](https://strandsagents.com/docs/api/python/strands.sandbox.not_a_sandbox_local_environment/index.md)
+- [strands.sandbox.posix_shell](https://strandsagents.com/docs/api/python/strands.sandbox.posix_shell/index.md)
+- [strands.sandbox.ssh](https://strandsagents.com/docs/api/python/strands.sandbox.ssh/index.md)
+- [strands.sandbox.types](https://strandsagents.com/docs/api/python/strands.sandbox.types/index.md)
+- [strands.session.file_session_manager](https://strandsagents.com/docs/api/python/strands.session.file_session_manager/index.md)
+- [strands.session.repository_session_manager](https://strandsagents.com/docs/api/python/strands.session.repository_session_manager/index.md)
+- [strands.session.s3_session_manager](https://strandsagents.com/docs/api/python/strands.session.s3_session_manager/index.md)
+- [strands.session.session_manager](https://strandsagents.com/docs/api/python/strands.session.session_manager/index.md)
+- [strands.session.session_repository](https://strandsagents.com/docs/api/python/strands.session.session_repository/index.md)
+- [strands.session.snapshot_session_manager](https://strandsagents.com/docs/api/python/strands.session.snapshot_session_manager/index.md)
+- [strands.storage.in_memory_storage](https://strandsagents.com/docs/api/python/strands.storage.in_memory_storage/index.md)
+- [strands.storage.local_file_storage](https://strandsagents.com/docs/api/python/strands.storage.local_file_storage/index.md)
+- [strands.storage.s3_storage](https://strandsagents.com/docs/api/python/strands.storage.s3_storage/index.md)
+- [strands.storage.search.bm25](https://strandsagents.com/docs/api/python/strands.storage.search.bm25/index.md)
+- [strands.storage.search.keyword](https://strandsagents.com/docs/api/python/strands.storage.search.keyword/index.md)
+- [strands.storage.search.types](https://strandsagents.com/docs/api/python/strands.storage.search.types/index.md)
+- [strands.storage.storage](https://strandsagents.com/docs/api/python/strands.storage.storage/index.md)
+- [strands.telemetry.config](https://strandsagents.com/docs/api/python/strands.telemetry.config/index.md)
+- [strands.telemetry.metrics](https://strandsagents.com/docs/api/python/strands.telemetry.metrics/index.md)
+- [strands.telemetry.tracer](https://strandsagents.com/docs/api/python/strands.telemetry.tracer/index.md)
+- [strands.tools.decorator](https://strandsagents.com/docs/api/python/strands.tools.decorator/index.md)
+- [strands.tools.executors.concurrent](https://strandsagents.com/docs/api/python/strands.tools.executors.concurrent/index.md)
+- [strands.tools.executors.sequential](https://strandsagents.com/docs/api/python/strands.tools.executors.sequential/index.md)
+- [strands.tools.loader](https://strandsagents.com/docs/api/python/strands.tools.loader/index.md)
+- [strands.tools.mcp.mcp_agent_tool](https://strandsagents.com/docs/api/python/strands.tools.mcp.mcp_agent_tool/index.md)
+- [strands.tools.mcp.mcp_client](https://strandsagents.com/docs/api/python/strands.tools.mcp.mcp_client/index.md)
+- [strands.tools.mcp.mcp_instrumentation](https://strandsagents.com/docs/api/python/strands.tools.mcp.mcp_instrumentation/index.md)
+- [strands.tools.mcp.mcp_tasks](https://strandsagents.com/docs/api/python/strands.tools.mcp.mcp_tasks/index.md)
+- [strands.tools.mcp.mcp_types](https://strandsagents.com/docs/api/python/strands.tools.mcp.mcp_types/index.md)
+- [strands.tools.registry](https://strandsagents.com/docs/api/python/strands.tools.registry/index.md)
+- [strands.tools.structured_output.structured_output_tool](https://strandsagents.com/docs/api/python/strands.tools.structured_output.structured_output_tool/index.md)
+- [strands.tools.structured_output.structured_output_utils](https://strandsagents.com/docs/api/python/strands.tools.structured_output.structured_output_utils/index.md)
+- [strands.tools.tool_provider](https://strandsagents.com/docs/api/python/strands.tools.tool_provider/index.md)
+- [strands.tools.tools](https://strandsagents.com/docs/api/python/strands.tools.tools/index.md)
+- [strands.tools.watcher](https://strandsagents.com/docs/api/python/strands.tools.watcher/index.md)
+- [strands.types.a2a](https://strandsagents.com/docs/api/python/strands.types.a2a/index.md)
+- [strands.types.agent](https://strandsagents.com/docs/api/python/strands.types.agent/index.md)
+- [strands.types.citations](https://strandsagents.com/docs/api/python/strands.types.citations/index.md)
+- [strands.types.collections](https://strandsagents.com/docs/api/python/strands.types.collections/index.md)
+- [strands.types.content](https://strandsagents.com/docs/api/python/strands.types.content/index.md)
+- [strands.types.event_loop](https://strandsagents.com/docs/api/python/strands.types.event_loop/index.md)
+- [strands.types.exceptions](https://strandsagents.com/docs/api/python/strands.types.exceptions/index.md)
+- [strands.types.guardrails](https://strandsagents.com/docs/api/python/strands.types.guardrails/index.md)
+- [strands.types.interrupt](https://strandsagents.com/docs/api/python/strands.types.interrupt/index.md)
+- [strands.types.json_dict](https://strandsagents.com/docs/api/python/strands.types.json_dict/index.md)
+- [strands.types.media](https://strandsagents.com/docs/api/python/strands.types.media/index.md)
+- [strands.types.session](https://strandsagents.com/docs/api/python/strands.types.session/index.md)
+- [strands.types.streaming](https://strandsagents.com/docs/api/python/strands.types.streaming/index.md)
+- [strands.types.tools](https://strandsagents.com/docs/api/python/strands.types.tools/index.md)
+- [strands.vended_interventions.cedar.cedar_authorization](https://strandsagents.com/docs/api/python/strands.vended_interventions.cedar.cedar_authorization/index.md)
+- [strands.vended_interventions.hitl.classifier](https://strandsagents.com/docs/api/python/strands.vended_interventions.hitl.classifier/index.md)
+- [strands.vended_interventions.hitl.hitl](https://strandsagents.com/docs/api/python/strands.vended_interventions.hitl.hitl/index.md)
+- [strands.vended_memory_stores](https://strandsagents.com/docs/api/python/strands.vended_memory_stores/index.md)
+- [strands.vended_memory_stores.bedrock_knowledge_base.store](https://strandsagents.com/docs/api/python/strands.vended_memory_stores.bedrock_knowledge_base.store/index.md)
+- [strands.vended_memory_stores.bedrock_knowledge_base.types](https://strandsagents.com/docs/api/python/strands.vended_memory_stores.bedrock_knowledge_base.types/index.md)
+- [strands.vended_memory_stores.file_memory_store.store](https://strandsagents.com/docs/api/python/strands.vended_memory_stores.file_memory_store.store/index.md)
+- [strands.vended_memory_stores.file_memory_store.types](https://strandsagents.com/docs/api/python/strands.vended_memory_stores.file_memory_store.types/index.md)
+- [strands.vended_memory_stores.test_memory_store.store](https://strandsagents.com/docs/api/python/strands.vended_memory_stores.test_memory_store.store/index.md)
+- [strands.vended_memory_stores.test_memory_store.types](https://strandsagents.com/docs/api/python/strands.vended_memory_stores.test_memory_store.types/index.md)
+- [strands.vended_plugins.context_injector.plugin](https://strandsagents.com/docs/api/python/strands.vended_plugins.context_injector.plugin/index.md)
+- [strands.vended_plugins.context_offloader.plugin](https://strandsagents.com/docs/api/python/strands.vended_plugins.context_offloader.plugin/index.md)
+- [strands.vended_plugins.context_offloader.storage](https://strandsagents.com/docs/api/python/strands.vended_plugins.context_offloader.storage/index.md)
+- [strands.vended_plugins.goal.judge](https://strandsagents.com/docs/api/python/strands.vended_plugins.goal.judge/index.md)
+- [strands.vended_plugins.goal.plugin](https://strandsagents.com/docs/api/python/strands.vended_plugins.goal.plugin/index.md)
+- [strands.vended_plugins.skills.agent_skills](https://strandsagents.com/docs/api/python/strands.vended_plugins.skills.agent_skills/index.md)
+- [strands.vended_plugins.skills.skill](https://strandsagents.com/docs/api/python/strands.vended_plugins.skills.skill/index.md)
+- [strands.vended_plugins.steering.context_providers.ledger_provider](https://strandsagents.com/docs/api/python/strands.vended_plugins.steering.context_providers.ledger_provider/index.md)
+- [strands.vended_plugins.steering.core.action](https://strandsagents.com/docs/api/python/strands.vended_plugins.steering.core.action/index.md)
+- [strands.vended_plugins.steering.core.context](https://strandsagents.com/docs/api/python/strands.vended_plugins.steering.core.context/index.md)
+- [strands.vended_plugins.steering.core.handler](https://strandsagents.com/docs/api/python/strands.vended_plugins.steering.core.handler/index.md)
+- [strands.vended_plugins.steering.handlers.llm.llm_handler](https://strandsagents.com/docs/api/python/strands.vended_plugins.steering.handlers.llm.llm_handler/index.md)
+- [strands.vended_plugins.steering.handlers.llm.mappers](https://strandsagents.com/docs/api/python/strands.vended_plugins.steering.handlers.llm.mappers/index.md)
+- [strands.vended_tools.a2a_client.a2a_client](https://strandsagents.com/docs/api/python/strands.vended_tools.a2a_client.a2a_client/index.md)
+- [strands.vended_tools.file_editor.file_editor](https://strandsagents.com/docs/api/python/strands.vended_tools.file_editor.file_editor/index.md)
+- [strands.vended_tools.handoff_to_user.handoff_to_user](https://strandsagents.com/docs/api/python/strands.vended_tools.handoff_to_user.handoff_to_user/index.md)
+- [strands.vended_tools.handoff_to_user.types](https://strandsagents.com/docs/api/python/strands.vended_tools.handoff_to_user.types/index.md)
+- [strands.vended_tools.http_request.http_request](https://strandsagents.com/docs/api/python/strands.vended_tools.http_request.http_request/index.md)
+- [strands.vended_tools.http_request.types](https://strandsagents.com/docs/api/python/strands.vended_tools.http_request.types/index.md)
+- [strands.vended_tools.mcp_router.mcp_router](https://strandsagents.com/docs/api/python/strands.vended_tools.mcp_router.mcp_router/index.md)
+- [strands.vended_tools.mcp_router.types](https://strandsagents.com/docs/api/python/strands.vended_tools.mcp_router.types/index.md)
+- [strands.vended_tools.notebook.notebook](https://strandsagents.com/docs/api/python/strands.vended_tools.notebook.notebook/index.md)
+- [strands.vended_tools.notebook.types](https://strandsagents.com/docs/api/python/strands.vended_tools.notebook.types/index.md)
+- [strands.vended_tools.shell.shell](https://strandsagents.com/docs/api/python/strands.vended_tools.shell.shell/index.md)
+- [strands.vended_tools.shell.types](https://strandsagents.com/docs/api/python/strands.vended_tools.shell.types/index.md)
+- [strands.vended_tools.sleep.sleep](https://strandsagents.com/docs/api/python/strands.vended_tools.sleep.sleep/index.md)
+- [strands.vended_tools.sleep.types](https://strandsagents.com/docs/api/python/strands.vended_tools.sleep.types/index.md)
+- [strands.vended_tools.web_fetch.types](https://strandsagents.com/docs/api/python/strands.vended_tools.web_fetch.types/index.md)
+- [strands.vended_tools.web_fetch.web_fetch](https://strandsagents.com/docs/api/python/strands.vended_tools.web_fetch.web_fetch/index.md)
+
+## Api TypeScript
+
+- [AddMessagesContext](https://strandsagents.com/docs/api/typescript/AddMessagesContext/index.md)
+- [AfterInvocationEvent](https://strandsagents.com/docs/api/typescript/AfterInvocationEvent/index.md)
+- [AfterModelCallEvent](https://strandsagents.com/docs/api/typescript/AfterModelCallEvent/index.md)
+- [AfterToolCallEvent](https://strandsagents.com/docs/api/typescript/AfterToolCallEvent/index.md)
+- [AfterToolsEvent](https://strandsagents.com/docs/api/typescript/AfterToolsEvent/index.md)
+- [Agent](https://strandsagents.com/docs/api/typescript/Agent/index.md)
+- [AgentAsToolOptions](https://strandsagents.com/docs/api/typescript/AgentAsToolOptions/index.md)
+- [AgentConfig](https://strandsagents.com/docs/api/typescript/AgentConfig/index.md)
+- [AgentMetadata](https://strandsagents.com/docs/api/typescript/AgentMetadata/index.md)
+- [AgentMetrics](https://strandsagents.com/docs/api/typescript/AgentMetrics/index.md)
+- [AgentResult](https://strandsagents.com/docs/api/typescript/AgentResult/index.md)
+- [AgentResultEvent](https://strandsagents.com/docs/api/typescript/AgentResultEvent/index.md)
+- [AgentStreamEvent](https://strandsagents.com/docs/api/typescript/AgentStreamEvent/index.md)
+- [AgentTrace](https://strandsagents.com/docs/api/typescript/AgentTrace/index.md)
+- [AudioBlock](https://strandsagents.com/docs/api/typescript/AudioBlock/index.md)
+- [AudioBlockData](https://strandsagents.com/docs/api/typescript/AudioBlockData/index.md)
+- [AudioFormat](https://strandsagents.com/docs/api/typescript/AudioFormat/index.md)
+- [AudioSource](https://strandsagents.com/docs/api/typescript/AudioSource/index.md)
+- [AudioSourceData](https://strandsagents.com/docs/api/typescript/AudioSourceData/index.md)
+- [BackgroundTasksConfig](https://strandsagents.com/docs/api/typescript/BackgroundTasksConfig/index.md)
+- [BackoffContext](https://strandsagents.com/docs/api/typescript/BackoffContext/index.md)
+- [BackoffStrategy](https://strandsagents.com/docs/api/typescript/BackoffStrategy/index.md)
+- [BaseModelConfig](https://strandsagents.com/docs/api/typescript/BaseModelConfig/index.md)
+- [BedrockCacheConfig](https://strandsagents.com/docs/api/typescript/BedrockCacheConfig/index.md)
+- [BedrockCacheTTL](https://strandsagents.com/docs/api/typescript/BedrockCacheTTL/index.md)
+- [BedrockGuardrailConfig](https://strandsagents.com/docs/api/typescript/BedrockGuardrailConfig/index.md)
+- [BedrockGuardrailRedactionConfig](https://strandsagents.com/docs/api/typescript/BedrockGuardrailRedactionConfig/index.md)
+- [BedrockModel](https://strandsagents.com/docs/api/typescript/BedrockModel/index.md)
+- [BedrockModelConfig](https://strandsagents.com/docs/api/typescript/BedrockModelConfig/index.md)
+- [BedrockModelOptions](https://strandsagents.com/docs/api/typescript/BedrockModelOptions/index.md)
+- [BeforeInvocationEvent](https://strandsagents.com/docs/api/typescript/BeforeInvocationEvent/index.md)
+- [BeforeModelCallEvent](https://strandsagents.com/docs/api/typescript/BeforeModelCallEvent/index.md)
+- [BeforeToolCallEvent](https://strandsagents.com/docs/api/typescript/BeforeToolCallEvent/index.md)
+- [BeforeToolsEvent](https://strandsagents.com/docs/api/typescript/BeforeToolsEvent/index.md)
+- [CacheConfig](https://strandsagents.com/docs/api/typescript/CacheConfig/index.md)
+- [CachePointBlock](https://strandsagents.com/docs/api/typescript/CachePointBlock/index.md)
+- [CachePointBlockData](https://strandsagents.com/docs/api/typescript/CachePointBlockData/index.md)
+- [CandidateInput](https://strandsagents.com/docs/api/typescript/CandidateInput/index.md)
+- [Citation](https://strandsagents.com/docs/api/typescript/Citation/index.md)
+- [CitationGeneratedContent](https://strandsagents.com/docs/api/typescript/CitationGeneratedContent/index.md)
+- [CitationLocation](https://strandsagents.com/docs/api/typescript/CitationLocation/index.md)
+- [CitationsBlock](https://strandsagents.com/docs/api/typescript/CitationsBlock/index.md)
+- [CitationsBlockData](https://strandsagents.com/docs/api/typescript/CitationsBlockData/index.md)
+- [CitationsDelta](https://strandsagents.com/docs/api/typescript/CitationsDelta/index.md)
+- [CitationSourceContent](https://strandsagents.com/docs/api/typescript/CitationSourceContent/index.md)
+- [ClassifierStrategy](https://strandsagents.com/docs/api/typescript/ClassifierStrategy/index.md)
+- [ClassifierStrategyOptions](https://strandsagents.com/docs/api/typescript/ClassifierStrategyOptions/index.md)
+- [ConcurrentInvocationError](https://strandsagents.com/docs/api/typescript/ConcurrentInvocationError/index.md)
+- [ConcurrentToolExecutor](https://strandsagents.com/docs/api/typescript/ConcurrentToolExecutor/index.md)
+- [configureLogging](https://strandsagents.com/docs/api/typescript/configureLogging/index.md)
+- [ConstantBackoff](https://strandsagents.com/docs/api/typescript/ConstantBackoff/index.md)
+- [ConstantBackoffOptions](https://strandsagents.com/docs/api/typescript/ConstantBackoffOptions/index.md)
+- [ContentBlock](https://strandsagents.com/docs/api/typescript/ContentBlock/index.md)
+- [ContentBlockData](https://strandsagents.com/docs/api/typescript/ContentBlockData/index.md)
+- [ContentBlockDelta](https://strandsagents.com/docs/api/typescript/ContentBlockDelta/index.md)
+- [ContentBlockEvent](https://strandsagents.com/docs/api/typescript/ContentBlockEvent/index.md)
+- [contentBlockFromData](https://strandsagents.com/docs/api/typescript/contentBlockFromData/index.md)
+- [ContentBlockStart](https://strandsagents.com/docs/api/typescript/ContentBlockStart/index.md)
+- [ContextManagerConfig](https://strandsagents.com/docs/api/typescript/ContextManagerConfig/index.md)
+- [ContextManagerStrategy](https://strandsagents.com/docs/api/typescript/ContextManagerStrategy/index.md)
+- [ContextState](https://strandsagents.com/docs/api/typescript/ContextState/index.md)
+- [ContextStrategy](https://strandsagents.com/docs/api/typescript/ContextStrategy/index.md)
+- [ContextWindowOverflowError](https://strandsagents.com/docs/api/typescript/ContextWindowOverflowError/index.md)
+- [ConversationManager](https://strandsagents.com/docs/api/typescript/ConversationManager/index.md)
+- [ConversationManagerOptions](https://strandsagents.com/docs/api/typescript/ConversationManagerOptions/index.md)
+- [ConversationManagerReduceOptions](https://strandsagents.com/docs/api/typescript/ConversationManagerReduceOptions/index.md)
+- [CountTokensOptions](https://strandsagents.com/docs/api/typescript/CountTokensOptions/index.md)
+- [DefaultModelRetryStrategy](https://strandsagents.com/docs/api/typescript/DefaultModelRetryStrategy/index.md)
+- [DefaultModelRetryStrategyOptions](https://strandsagents.com/docs/api/typescript/DefaultModelRetryStrategyOptions/index.md)
+- [DefaultNotConfiguredError](https://strandsagents.com/docs/api/typescript/DefaultNotConfiguredError/index.md)
+- [DirectToolCallOptions](https://strandsagents.com/docs/api/typescript/DirectToolCallOptions/index.md)
+- [DocumentBlock](https://strandsagents.com/docs/api/typescript/DocumentBlock/index.md)
+- [DocumentBlockData](https://strandsagents.com/docs/api/typescript/DocumentBlockData/index.md)
+- [DocumentContentBlock](https://strandsagents.com/docs/api/typescript/DocumentContentBlock/index.md)
+- [DocumentContentBlockData](https://strandsagents.com/docs/api/typescript/DocumentContentBlockData/index.md)
+- [DocumentFormat](https://strandsagents.com/docs/api/typescript/DocumentFormat/index.md)
+- [DocumentSource](https://strandsagents.com/docs/api/typescript/DocumentSource/index.md)
+- [DocumentSourceData](https://strandsagents.com/docs/api/typescript/DocumentSourceData/index.md)
+- [ElicitationCallback](https://strandsagents.com/docs/api/typescript/ElicitationCallback/index.md)
+- [ElicitationContext](https://strandsagents.com/docs/api/typescript/ElicitationContext/index.md)
+- [ExecuteOptions](https://strandsagents.com/docs/api/typescript/ExecuteOptions/index.md)
+- [ExecuteToolContext](https://strandsagents.com/docs/api/typescript/ExecuteToolContext/index.md)
+- [ExecuteToolResult](https://strandsagents.com/docs/api/typescript/ExecuteToolResult/index.md)
+- [ExecuteToolStage](https://strandsagents.com/docs/api/typescript/ExecuteToolStage/index.md)
+- [ExecutionResult](https://strandsagents.com/docs/api/typescript/ExecutionResult/index.md)
+- [ExponentialBackoff](https://strandsagents.com/docs/api/typescript/ExponentialBackoff/index.md)
+- [ExponentialBackoffOptions](https://strandsagents.com/docs/api/typescript/ExponentialBackoffOptions/index.md)
+- [ExtractionConfig](https://strandsagents.com/docs/api/typescript/ExtractionConfig/index.md)
+- [ExtractionResult](https://strandsagents.com/docs/api/typescript/ExtractionResult/index.md)
+- [ExtractionTrigger](https://strandsagents.com/docs/api/typescript/ExtractionTrigger/index.md)
+- [ExtractionTriggerContext](https://strandsagents.com/docs/api/typescript/ExtractionTriggerContext/index.md)
+- [Extractor](https://strandsagents.com/docs/api/typescript/Extractor/index.md)
+- [ExtractorContext](https://strandsagents.com/docs/api/typescript/ExtractorContext/index.md)
+- [FallbackStrategy](https://strandsagents.com/docs/api/typescript/FallbackStrategy/index.md)
+- [FileInfo](https://strandsagents.com/docs/api/typescript/FileInfo/index.md)
+- [FileStorage](https://strandsagents.com/docs/api/typescript/FileStorage/index.md)
+- [FunctionTool](https://strandsagents.com/docs/api/typescript/FunctionTool/index.md)
+- [FunctionToolCallback](https://strandsagents.com/docs/api/typescript/FunctionToolCallback/index.md)
+- [FunctionToolConfig](https://strandsagents.com/docs/api/typescript/FunctionToolConfig/index.md)
+- [Graph](https://strandsagents.com/docs/api/typescript/Graph/index.md)
+- [GuardContentBlock](https://strandsagents.com/docs/api/typescript/GuardContentBlock/index.md)
+- [GuardContentBlockData](https://strandsagents.com/docs/api/typescript/GuardContentBlockData/index.md)
+- [GuardContentImage](https://strandsagents.com/docs/api/typescript/GuardContentImage/index.md)
+- [GuardContentText](https://strandsagents.com/docs/api/typescript/GuardContentText/index.md)
+- [GuardImageFormat](https://strandsagents.com/docs/api/typescript/GuardImageFormat/index.md)
+- [GuardImageSource](https://strandsagents.com/docs/api/typescript/GuardImageSource/index.md)
+- [GuardQualifier](https://strandsagents.com/docs/api/typescript/GuardQualifier/index.md)
+- [HookableEvent](https://strandsagents.com/docs/api/typescript/HookableEvent/index.md)
+- [HookableEventConstructor](https://strandsagents.com/docs/api/typescript/HookableEventConstructor/index.md)
+- [HookCallback](https://strandsagents.com/docs/api/typescript/HookCallback/index.md)
+- [HookCallbackOptions](https://strandsagents.com/docs/api/typescript/HookCallbackOptions/index.md)
+- [HookOrder](https://strandsagents.com/docs/api/typescript/HookOrder/index.md)
+- [HookRegistry](https://strandsagents.com/docs/api/typescript/HookRegistry/index.md)
+- [ImageBlock](https://strandsagents.com/docs/api/typescript/ImageBlock/index.md)
+- [ImageBlockData](https://strandsagents.com/docs/api/typescript/ImageBlockData/index.md)
+- [ImageFormat](https://strandsagents.com/docs/api/typescript/ImageFormat/index.md)
+- [ImageSource](https://strandsagents.com/docs/api/typescript/ImageSource/index.md)
+- [ImageSourceData](https://strandsagents.com/docs/api/typescript/ImageSourceData/index.md)
+- [InitializedEvent](https://strandsagents.com/docs/api/typescript/InitializedEvent/index.md)
+- [InjectionConfig](https://strandsagents.com/docs/api/typescript/InjectionConfig/index.md)
+- [InjectionContext](https://strandsagents.com/docs/api/typescript/InjectionContext/index.md)
+- [InjectionTrigger](https://strandsagents.com/docs/api/typescript/InjectionTrigger/index.md)
+- [Interrupt](https://strandsagents.com/docs/api/typescript/Interrupt/index.md)
+- [InterruptEvent](https://strandsagents.com/docs/api/typescript/InterruptEvent/index.md)
+- [InterruptParams](https://strandsagents.com/docs/api/typescript/InterruptParams/index.md)
+- [InterruptResponse](https://strandsagents.com/docs/api/typescript/InterruptResponse/index.md)
+- [InterruptResponseContent](https://strandsagents.com/docs/api/typescript/InterruptResponseContent/index.md)
+- [InterruptResponseContentData](https://strandsagents.com/docs/api/typescript/InterruptResponseContentData/index.md)
+- [InterruptSource](https://strandsagents.com/docs/api/typescript/InterruptSource/index.md)
+- [IntervalTrigger](https://strandsagents.com/docs/api/typescript/IntervalTrigger/index.md)
+- [IntervalTriggerOptions](https://strandsagents.com/docs/api/typescript/IntervalTriggerOptions/index.md)
+- [InterventionActions](https://strandsagents.com/docs/api/typescript/InterventionActions/index.md)
+- [InterventionHandler](https://strandsagents.com/docs/api/typescript/InterventionHandler/index.md)
+- [InvocationState](https://strandsagents.com/docs/api/typescript/InvocationState/index.md)
+- [InvocationTrigger](https://strandsagents.com/docs/api/typescript/InvocationTrigger/index.md)
+- [InvokableTool](https://strandsagents.com/docs/api/typescript/InvokableTool/index.md)
+- [InvokeArgs](https://strandsagents.com/docs/api/typescript/InvokeArgs/index.md)
+- [InvokeModelContext](https://strandsagents.com/docs/api/typescript/InvokeModelContext/index.md)
+- [InvokeModelResult](https://strandsagents.com/docs/api/typescript/InvokeModelResult/index.md)
+- [InvokeModelStage](https://strandsagents.com/docs/api/typescript/InvokeModelStage/index.md)
+- [InvokeOptions](https://strandsagents.com/docs/api/typescript/InvokeOptions/index.md)
+- [isModelStreamEvent](https://strandsagents.com/docs/api/typescript/isModelStreamEvent/index.md)
+- [JitterKind](https://strandsagents.com/docs/api/typescript/JitterKind/index.md)
+- [JsonBlock](https://strandsagents.com/docs/api/typescript/JsonBlock/index.md)
+- [JSONSchema](https://strandsagents.com/docs/api/typescript/JSONSchema/index.md)
+- [JsonValidationError](https://strandsagents.com/docs/api/typescript/JsonValidationError/index.md)
+- [JSONValue](https://strandsagents.com/docs/api/typescript/JSONValue/index.md)
+- [LifecycleObserver](https://strandsagents.com/docs/api/typescript/LifecycleObserver/index.md)
+- [LinearBackoff](https://strandsagents.com/docs/api/typescript/LinearBackoff/index.md)
+- [LinearBackoffOptions](https://strandsagents.com/docs/api/typescript/LinearBackoffOptions/index.md)
+- [LocationData](https://strandsagents.com/docs/api/typescript/LocationData/index.md)
+- [Logger](https://strandsagents.com/docs/api/typescript/Logger/index.md)
+- [MaxTokensError](https://strandsagents.com/docs/api/typescript/MaxTokensError/index.md)
+- [McpCallToolOptions](https://strandsagents.com/docs/api/typescript/McpCallToolOptions/index.md)
+- [McpClient](https://strandsagents.com/docs/api/typescript/McpClient/index.md)
+- [McpClientConfig](https://strandsagents.com/docs/api/typescript/McpClientConfig/index.md)
+- [McpClientCredentials](https://strandsagents.com/docs/api/typescript/McpClientCredentials/index.md)
+- [McpClientOptions](https://strandsagents.com/docs/api/typescript/McpClientOptions/index.md)
+- [McpConnectionState](https://strandsagents.com/docs/api/typescript/McpConnectionState/index.md)
+- [McpListToolsOptions](https://strandsagents.com/docs/api/typescript/McpListToolsOptions/index.md)
+- [McpLoadServersOptions](https://strandsagents.com/docs/api/typescript/McpLoadServersOptions/index.md)
+- [McpServerConfig](https://strandsagents.com/docs/api/typescript/McpServerConfig/index.md)
+- [McpToolFilterCallback](https://strandsagents.com/docs/api/typescript/McpToolFilterCallback/index.md)
+- [McpToolFilters](https://strandsagents.com/docs/api/typescript/McpToolFilters/index.md)
+- [McpToolMatcher](https://strandsagents.com/docs/api/typescript/McpToolMatcher/index.md)
+- [McpTransport](https://strandsagents.com/docs/api/typescript/McpTransport/index.md)
+- [MemoryAddOptions](https://strandsagents.com/docs/api/typescript/MemoryAddOptions/index.md)
+- [MemoryAddToolConfig](https://strandsagents.com/docs/api/typescript/MemoryAddToolConfig/index.md)
+- [MemoryContentBlockType](https://strandsagents.com/docs/api/typescript/MemoryContentBlockType/index.md)
+- [MemoryEntry](https://strandsagents.com/docs/api/typescript/MemoryEntry/index.md)
+- [MemoryInjectionConfig](https://strandsagents.com/docs/api/typescript/MemoryInjectionConfig/index.md)
+- [MemoryManager](https://strandsagents.com/docs/api/typescript/MemoryManager/index.md)
+- [MemoryManagerConfig](https://strandsagents.com/docs/api/typescript/MemoryManagerConfig/index.md)
+- [MemoryMessageFilter](https://strandsagents.com/docs/api/typescript/MemoryMessageFilter/index.md)
+- [MemorySearchOptions](https://strandsagents.com/docs/api/typescript/MemorySearchOptions/index.md)
+- [MemoryStore](https://strandsagents.com/docs/api/typescript/MemoryStore/index.md)
+- [MemoryStoreConfig](https://strandsagents.com/docs/api/typescript/MemoryStoreConfig/index.md)
+- [MemoryToolConfig](https://strandsagents.com/docs/api/typescript/MemoryToolConfig/index.md)
+- [Message](https://strandsagents.com/docs/api/typescript/Message/index.md)
+- [MessageAddedEvent](https://strandsagents.com/docs/api/typescript/MessageAddedEvent/index.md)
+- [MessageData](https://strandsagents.com/docs/api/typescript/MessageData/index.md)
+- [Metrics](https://strandsagents.com/docs/api/typescript/Metrics/index.md)
+- [MiddlewareHandler](https://strandsagents.com/docs/api/typescript/MiddlewareHandler/index.md)
+- [MiddlewareHandlerOf](https://strandsagents.com/docs/api/typescript/MiddlewareHandlerOf/index.md)
+- [MiddlewareInputHandler](https://strandsagents.com/docs/api/typescript/MiddlewareInputHandler/index.md)
+- [MiddlewareInterruptible](https://strandsagents.com/docs/api/typescript/MiddlewareInterruptible/index.md)
+- [MiddlewareInterruptResult](https://strandsagents.com/docs/api/typescript/MiddlewareInterruptResult/index.md)
+- [MiddlewareNext](https://strandsagents.com/docs/api/typescript/MiddlewareNext/index.md)
+- [MiddlewareNextOf](https://strandsagents.com/docs/api/typescript/MiddlewareNextOf/index.md)
+- [MiddlewareOutputHandler](https://strandsagents.com/docs/api/typescript/MiddlewareOutputHandler/index.md)
+- [MiddlewareStage](https://strandsagents.com/docs/api/typescript/MiddlewareStage/index.md)
+- [Model](https://strandsagents.com/docs/api/typescript/Model/index.md)
+- [ModelContentBlockDeltaEvent](https://strandsagents.com/docs/api/typescript/ModelContentBlockDeltaEvent/index.md)
+- [ModelContentBlockDeltaEventData](https://strandsagents.com/docs/api/typescript/ModelContentBlockDeltaEventData/index.md)
+- [ModelContentBlockStartEvent](https://strandsagents.com/docs/api/typescript/ModelContentBlockStartEvent/index.md)
+- [ModelContentBlockStartEventData](https://strandsagents.com/docs/api/typescript/ModelContentBlockStartEventData/index.md)
+- [ModelContentBlockStopEvent](https://strandsagents.com/docs/api/typescript/ModelContentBlockStopEvent/index.md)
+- [ModelError](https://strandsagents.com/docs/api/typescript/ModelError/index.md)
+- [ModelExtractor](https://strandsagents.com/docs/api/typescript/ModelExtractor/index.md)
+- [ModelExtractorOptions](https://strandsagents.com/docs/api/typescript/ModelExtractorOptions/index.md)
+- [ModelMessageEvent](https://strandsagents.com/docs/api/typescript/ModelMessageEvent/index.md)
+- [ModelMessageStartEvent](https://strandsagents.com/docs/api/typescript/ModelMessageStartEvent/index.md)
+- [ModelMessageStartEventData](https://strandsagents.com/docs/api/typescript/ModelMessageStartEventData/index.md)
+- [ModelMessageStopEvent](https://strandsagents.com/docs/api/typescript/ModelMessageStopEvent/index.md)
+- [ModelMessageStopEventData](https://strandsagents.com/docs/api/typescript/ModelMessageStopEventData/index.md)
+- [ModelMetadataEvent](https://strandsagents.com/docs/api/typescript/ModelMetadataEvent/index.md)
+- [ModelMetadataEventData](https://strandsagents.com/docs/api/typescript/ModelMetadataEventData/index.md)
+- [ModelRedactionEvent](https://strandsagents.com/docs/api/typescript/ModelRedactionEvent/index.md)
+- [ModelRedactionEventData](https://strandsagents.com/docs/api/typescript/ModelRedactionEventData/index.md)
+- [ModelRetryStrategy](https://strandsagents.com/docs/api/typescript/ModelRetryStrategy/index.md)
+- [ModelRouter](https://strandsagents.com/docs/api/typescript/ModelRouter/index.md)
+- [ModelRouterOptions](https://strandsagents.com/docs/api/typescript/ModelRouterOptions/index.md)
+- [ModelStopResponse](https://strandsagents.com/docs/api/typescript/ModelStopResponse/index.md)
+- [ModelStreamEvent](https://strandsagents.com/docs/api/typescript/ModelStreamEvent/index.md)
+- [ModelStreamUpdateEvent](https://strandsagents.com/docs/api/typescript/ModelStreamUpdateEvent/index.md)
+- [ModelThrottledError](https://strandsagents.com/docs/api/typescript/ModelThrottledError/index.md)
+- [MultiAgentSaveLatestStrategy](https://strandsagents.com/docs/api/typescript/MultiAgentSaveLatestStrategy/index.md)
+- [NullConversationManager](https://strandsagents.com/docs/api/typescript/NullConversationManager/index.md)
+- [Offload](https://strandsagents.com/docs/api/typescript/Offload/index.md)
+- [OffloadConditions](https://strandsagents.com/docs/api/typescript/OffloadConditions/index.md)
+- [OffloadStrategyBuilder](https://strandsagents.com/docs/api/typescript/OffloadStrategyBuilder/index.md)
+- [OffloadTarget](https://strandsagents.com/docs/api/typescript/OffloadTarget/index.md)
+- [OnError](https://strandsagents.com/docs/api/typescript/OnError/index.md)
+- [OutputFile](https://strandsagents.com/docs/api/typescript/OutputFile/index.md)
+- [Plugin](https://strandsagents.com/docs/api/typescript/Plugin/index.md)
+- [PosixShellSandbox](https://strandsagents.com/docs/api/typescript/PosixShellSandbox/index.md)
+- [ProactiveCompressionConfig](https://strandsagents.com/docs/api/typescript/ProactiveCompressionConfig/index.md)
+- [ReasoningBlock](https://strandsagents.com/docs/api/typescript/ReasoningBlock/index.md)
+- [ReasoningBlockData](https://strandsagents.com/docs/api/typescript/ReasoningBlockData/index.md)
+- [ReasoningContentDelta](https://strandsagents.com/docs/api/typescript/ReasoningContentDelta/index.md)
+- [RedactInputContent](https://strandsagents.com/docs/api/typescript/RedactInputContent/index.md)
+- [Redaction](https://strandsagents.com/docs/api/typescript/Redaction/index.md)
+- [RedactOutputContent](https://strandsagents.com/docs/api/typescript/RedactOutputContent/index.md)
+- [RetryDecision](https://strandsagents.com/docs/api/typescript/RetryDecision/index.md)
+- [RetryStrategy](https://strandsagents.com/docs/api/typescript/RetryStrategy/index.md)
+- [Role](https://strandsagents.com/docs/api/typescript/Role/index.md)
+- [RoutingAttempt](https://strandsagents.com/docs/api/typescript/RoutingAttempt/index.md)
+- [RoutingCandidate](https://strandsagents.com/docs/api/typescript/RoutingCandidate/index.md)
+- [RoutingCandidateOptions](https://strandsagents.com/docs/api/typescript/RoutingCandidateOptions/index.md)
+- [RoutingContext](https://strandsagents.com/docs/api/typescript/RoutingContext/index.md)
+- [RoutingStrategy](https://strandsagents.com/docs/api/typescript/RoutingStrategy/index.md)
+- [S3Location](https://strandsagents.com/docs/api/typescript/S3Location/index.md)
+- [S3LocationData](https://strandsagents.com/docs/api/typescript/S3LocationData/index.md)
+- [Sandbox](https://strandsagents.com/docs/api/typescript/Sandbox/index.md)
+- [SandboxAbortError](https://strandsagents.com/docs/api/typescript/SandboxAbortError/index.md)
+- [SandboxPathNotFoundError](https://strandsagents.com/docs/api/typescript/SandboxPathNotFoundError/index.md)
+- [SandboxTimeoutError](https://strandsagents.com/docs/api/typescript/SandboxTimeoutError/index.md)
+- [SaveLatestStrategy](https://strandsagents.com/docs/api/typescript/SaveLatestStrategy/index.md)
+- [Scope](https://strandsagents.com/docs/api/typescript/Scope/index.md)
+- [SearchOptions](https://strandsagents.com/docs/api/typescript/SearchOptions/index.md)
+- [SequentialToolExecutor](https://strandsagents.com/docs/api/typescript/SequentialToolExecutor/index.md)
+- [SerializableMcpToolFilters](https://strandsagents.com/docs/api/typescript/SerializableMcpToolFilters/index.md)
+- [SessionManager](https://strandsagents.com/docs/api/typescript/SessionManager/index.md)
+- [SessionManagerConfig](https://strandsagents.com/docs/api/typescript/SessionManagerConfig/index.md)
+- [SessionStorage](https://strandsagents.com/docs/api/typescript/SessionStorage/index.md)
+- [SlidingWindowConversationManager](https://strandsagents.com/docs/api/typescript/SlidingWindowConversationManager/index.md)
+- [SlidingWindowConversationManagerConfig](https://strandsagents.com/docs/api/typescript/SlidingWindowConversationManagerConfig/index.md)
+- [Snapshot](https://strandsagents.com/docs/api/typescript/Snapshot/index.md)
+- [SNAPSHOT_SCHEMA_VERSION](https://strandsagents.com/docs/api/typescript/SNAPSHOT_SCHEMA_VERSION/index.md)
+- [SnapshotField](https://strandsagents.com/docs/api/typescript/SnapshotField/index.md)
+- [SnapshotLocation](https://strandsagents.com/docs/api/typescript/SnapshotLocation/index.md)
+- [SnapshotManifest](https://strandsagents.com/docs/api/typescript/SnapshotManifest/index.md)
+- [SnapshotPreset](https://strandsagents.com/docs/api/typescript/SnapshotPreset/index.md)
+- [SnapshotStorage](https://strandsagents.com/docs/api/typescript/SnapshotStorage/index.md)
+- [SnapshotTriggerCallback](https://strandsagents.com/docs/api/typescript/SnapshotTriggerCallback/index.md)
+- [SnapshotTriggerParams](https://strandsagents.com/docs/api/typescript/SnapshotTriggerParams/index.md)
+- [StashConfig](https://strandsagents.com/docs/api/typescript/StashConfig/index.md)
+- [StateStore](https://strandsagents.com/docs/api/typescript/StateStore/index.md)
+- [StopReason](https://strandsagents.com/docs/api/typescript/StopReason/index.md)
+- [Storage](https://strandsagents.com/docs/api/typescript/Storage/index.md)
+- [StorageError](https://strandsagents.com/docs/api/typescript/StorageError/index.md)
+- [StrategyPresetName](https://strandsagents.com/docs/api/typescript/StrategyPresetName/index.md)
+- [StreamChunk](https://strandsagents.com/docs/api/typescript/StreamChunk/index.md)
+- [StreamEvent](https://strandsagents.com/docs/api/typescript/StreamEvent/index.md)
+- [StreamOptions](https://strandsagents.com/docs/api/typescript/StreamOptions/index.md)
+- [StreamType](https://strandsagents.com/docs/api/typescript/StreamType/index.md)
+- [StructuredOutputError](https://strandsagents.com/docs/api/typescript/StructuredOutputError/index.md)
+- [SummarizeConfig](https://strandsagents.com/docs/api/typescript/SummarizeConfig/index.md)
+- [SummarizingConversationManager](https://strandsagents.com/docs/api/typescript/SummarizingConversationManager/index.md)
+- [SummarizingConversationManagerConfig](https://strandsagents.com/docs/api/typescript/SummarizingConversationManagerConfig/index.md)
+- [Swarm](https://strandsagents.com/docs/api/typescript/Swarm/index.md)
+- [SystemContentBlock](https://strandsagents.com/docs/api/typescript/SystemContentBlock/index.md)
+- [SystemPrompt](https://strandsagents.com/docs/api/typescript/SystemPrompt/index.md)
+- [SystemPromptData](https://strandsagents.com/docs/api/typescript/SystemPromptData/index.md)
+- [TakeSnapshotOptions](https://strandsagents.com/docs/api/typescript/TakeSnapshotOptions/index.md)
+- [TasksConfig](https://strandsagents.com/docs/api/typescript/TasksConfig/index.md)
+- [TextBlock](https://strandsagents.com/docs/api/typescript/TextBlock/index.md)
+- [TextBlockData](https://strandsagents.com/docs/api/typescript/TextBlockData/index.md)
+- [TextDelta](https://strandsagents.com/docs/api/typescript/TextDelta/index.md)
+- [tool](https://strandsagents.com/docs/api/typescript/tool/index.md)
+- [Tool](https://strandsagents.com/docs/api/typescript/Tool/index.md)
+- [ToolCallerProxy](https://strandsagents.com/docs/api/typescript/ToolCallerProxy/index.md)
+- [ToolChoice](https://strandsagents.com/docs/api/typescript/ToolChoice/index.md)
+- [ToolContext](https://strandsagents.com/docs/api/typescript/ToolContext/index.md)
+- [ToolExecutorStrategy](https://strandsagents.com/docs/api/typescript/ToolExecutorStrategy/index.md)
+- [ToolHandle](https://strandsagents.com/docs/api/typescript/ToolHandle/index.md)
+- [ToolList](https://strandsagents.com/docs/api/typescript/ToolList/index.md)
+- [ToolNotFoundError](https://strandsagents.com/docs/api/typescript/ToolNotFoundError/index.md)
+- [ToolResultBlock](https://strandsagents.com/docs/api/typescript/ToolResultBlock/index.md)
+- [ToolResultBlockData](https://strandsagents.com/docs/api/typescript/ToolResultBlockData/index.md)
+- [ToolResultContent](https://strandsagents.com/docs/api/typescript/ToolResultContent/index.md)
+- [toolResultContentFromData](https://strandsagents.com/docs/api/typescript/toolResultContentFromData/index.md)
+- [ToolResultEvent](https://strandsagents.com/docs/api/typescript/ToolResultEvent/index.md)
+- [ToolResultStatus](https://strandsagents.com/docs/api/typescript/ToolResultStatus/index.md)
+- [ToolSpec](https://strandsagents.com/docs/api/typescript/ToolSpec/index.md)
+- [ToolStreamEvent](https://strandsagents.com/docs/api/typescript/ToolStreamEvent/index.md)
+- [ToolStreamEventData](https://strandsagents.com/docs/api/typescript/ToolStreamEventData/index.md)
+- [ToolStreamGenerator](https://strandsagents.com/docs/api/typescript/ToolStreamGenerator/index.md)
+- [ToolStreamUpdateEvent](https://strandsagents.com/docs/api/typescript/ToolStreamUpdateEvent/index.md)
+- [ToolUse](https://strandsagents.com/docs/api/typescript/ToolUse/index.md)
+- [ToolUseBlock](https://strandsagents.com/docs/api/typescript/ToolUseBlock/index.md)
+- [ToolUseBlockData](https://strandsagents.com/docs/api/typescript/ToolUseBlockData/index.md)
+- [ToolUseData](https://strandsagents.com/docs/api/typescript/ToolUseData/index.md)
+- [ToolUseInputDelta](https://strandsagents.com/docs/api/typescript/ToolUseInputDelta/index.md)
+- [ToolUseStart](https://strandsagents.com/docs/api/typescript/ToolUseStart/index.md)
+- [ToolValidationError](https://strandsagents.com/docs/api/typescript/ToolValidationError/index.md)
+- [TruncateConfig](https://strandsagents.com/docs/api/typescript/TruncateConfig/index.md)
+- [Usage](https://strandsagents.com/docs/api/typescript/Usage/index.md)
+- [VideoBlock](https://strandsagents.com/docs/api/typescript/VideoBlock/index.md)
+- [VideoBlockData](https://strandsagents.com/docs/api/typescript/VideoBlockData/index.md)
+- [VideoFormat](https://strandsagents.com/docs/api/typescript/VideoFormat/index.md)
+- [VideoSource](https://strandsagents.com/docs/api/typescript/VideoSource/index.md)
+- [VideoSourceData](https://strandsagents.com/docs/api/typescript/VideoSourceData/index.md)
+- [ZodTool](https://strandsagents.com/docs/api/typescript/ZodTool/index.md)
+- [ZodToolConfig](https://strandsagents.com/docs/api/typescript/ZodToolConfig/index.md)
+
+## Blog
+
+- [Introducing Strands harness: frontier performance with 28% lower token cost](https://strandsagents.com/blog/introducing-strands-harness/index.md): Strands harness is a fully assembled, customizable, state-of-the-art agent you run locally or deploy anywhere.
+- [Framework-agnostic evaluation with Strands Evals](https://strandsagents.com/blog/framework-agnostic-evaluation-strands-evals/index.md): Strands Evals supports agents built with Claude Agents SDK, OpenAI Agents, Google ADK, and more. Learn how it achieves compatibility with other frameworks and how you can begin writing cross-framework experiments.
+- [Strands Team AI Usage Reflection](https://strandsagents.com/blog/ai-usage-reflection/index.md): A reflection on the impact that AI has had on the strands agents team, our thoughts about it, and how we intend to address the issues we are facing.
+- [Our production SDK hit 99.95% on ARC-AGI-3](https://strandsagents.com/blog/our-production-sdk-hit-99-95-on-arc-agi-3/index.md): Strands Agents scored 99.95% on ARC-AGI-3 using the same minimal harness that developers ship to production every day
+- [Robots working together: connecting agents to the physical world with Strands Robots and the Model Hardware Standard](https://strandsagents.com/blog/robots-working-together-model-hardware-standard-strands-robots/index.md): How Strands Robots lets agents read from and act on many robots and devices at once, across Zenoh, AWS IoT, and the new Model Hardware Standard (MHS), in simulation and the real world.
+- [Figma to Code at Scale: Building with Strands Agents](https://strandsagents.com/blog/figma-to-code-at-scale-building-with-strands-agents/index.md): A team at Amazon Ads built a multi-agent system that converts Figma designs into production ad layouts. Here's what their architecture looks like, why they chose Strands, and the lessons they learned shipping it.
+- [Hackathon Challenge: automate the one task you keep putting off](https://strandsagents.com/blog/an-agent-for-the-thing-you-keep-putting-off/index.md): Pick the recurring chore you never quite get to and hand it to an agent. It is harder, and more interesting, than a cron job. There is also $40K in it.
+- [Introducing Harness Optimizer: Automatically optimize your agent harness](https://strandsagents.com/blog/introducing-harness-optimizer/index.md): Harness Optimizer is an open-source library that optimizes the context around your LLM agent (system prompt, tool docs, skills) the way you'd train a model: rollouts in, rewards out, parameters updated.
+- [Reduced cost, better isolation, and more resilience: Strands Agents evolves next-gen capabilities](https://strandsagents.com/blog/reduced-cost-better-isolation-more-resilience/index.md): Strands Agents ships context management that cuts costs in half, Strands Shell for sandboxed agent execution, and chaos testing and red teaming in Strands Evals 1.0.
+- [Inside Agentic Football Cup: 10 Strands Agents, 1 Second to Decide](https://strandsagents.com/blog/inside-agentic-football-cup/index.md): How we use Strands Agents and the model-driven approach to run 5v5 autonomous football matches inside a 4-hour developer workshop, with a hard latency contract, structured outputs, and multi-agent coordination.
+- [Multimodal evaluators: MLLM-as-a-judge for image-to-text tasks in Strands Evals](https://strandsagents.com/blog/multimodal-evaluators-mllm-as-a-judge-image-to-text-strands-evals/index.md): Announcing four new MLLM-as-a-Judge evaluators for image-to-text tasks in Strands Evals: Overall Quality, Correctness, Faithfulness, and Instruction Following — automated, image-grounded scoring with reasoning.
+- [What We Learned from One Year of Building Production Agents](https://strandsagents.com/blog/what-we-learned-from-one-year-of-building-production-agents/index.md): Strands Agents turned one year old. Here are the key lessons our engineers learned after open sourcing this framework and hitting 25 million downloads.
+- [Introducing Strands Agents TypeScript 1.0: Build Production Agents in TypeScript](https://strandsagents.com/blog/strands-agents-typescript-v1/index.md): Version 1.0 of the Strands Agents TypeScript SDK is here. Build type-safe AI agents with full model provider support, custom tools, plugins, and multi-agent orchestration in Node.js and the browser.
+- [The Strands Agents Community Has a New Home](https://strandsagents.com/blog/strands-agents-discord-community/index.md): The Strands Agents Discord server is live. A place for builders to get real-time help, share what they've built, and connect with the Strands team.
+- [ToolSimulator: scalable tool testing for AI agents](https://strandsagents.com/blog/toolsimulator-scalable-tool-testing-ai-agents/index.md): ToolSimulator is an LLM-powered framework within Strands Evals that enables safe, scalable agent testing by using simulated tool responses instead of risky live API calls.
+- [Strands Agents TypeScript SDK: Build AI Agents in TypeScript](https://strandsagents.com/blog/strands-agents-typescript-sdk/index.md): The Strands Agents TypeScript SDK brings the model-driven approach to the TypeScript ecosystem. Build type-safe AI agents that run in Node.js and the browser.
+- [Simulate realistic users to evaluate multi-turn AI agents in Strands Evals](https://strandsagents.com/blog/simulate-realistic-users-multi-turn-agents-strands-evals/index.md): ActorSimulator in the Strands Evals SDK enables teams to test conversational agents through realistic, goal-driven simulated users rather than relying on static test cases or manual testing.
+- [Evaluating AI agents for production: A practical guide to Strands Evals](https://strandsagents.com/blog/evaluating-ai-agents-practical-guide-strands-evals/index.md): Learn how to systematically evaluate AI agents using Strands Evals, covering core concepts like cases, experiments, evaluators, multi-turn simulation capabilities, and practical integration patterns for production deployment.
+- [How Steering Hooks Achieved 100% Agent Accuracy Where Prompts and Workflows Failed](https://strandsagents.com/blog/steering-accuracy-beats-prompts-workflows/index.md): Steering hooks achieved a 100% accuracy pass rate across 600 evaluation runs, compared to 82.5% for simple prompt-based instructions and 80.8% for graph-based workflows.
+- [Runtime Guardrails for Strands Agents with Agent Control](https://strandsagents.com/blog/strands-agents-with-agent-control/index.md): Define what your Strands agents can and can't do at runtime, without changing a line of agent code.
+- [Introducing Strands Labs: Get hands-on today with state-of-the-art, experimental approaches to agentic development](https://strandsagents.com/blog/introducing-strands-labs/index.md): Strands Labs is a new GitHub organization designed to give developers the ability to get hands-on with experimental, state-of-the-art approaches to agentic AI development.
+- [Building intelligent physical AI: From edge to cloud with Strands Agents, Bedrock AgentCore, Claude 4.5, NVIDIA GR00T, and Hugging Face LeRobot](https://strandsagents.com/blog/strands-physical-ai/index.md): Learn how to build physical AI systems that combine edge computing with cloud intelligence using Strands Agents, NVIDIA GR00T, and Hugging Face LeRobot.
+- [Introducing Strands Agent SOPs – Natural Language Workflows for AI Agents](https://strandsagents.com/blog/introducing-strands-agent-sops/index.md): Agent SOPs are a standardized markdown format for defining AI agent workflows in natural language that balances flexibility and control.
+- [Strands Agents and the Model-Driven Approach](https://strandsagents.com/blog/strands-agents-model-driven-approach/index.md): Learn how the model-driven approach in Strands Agents SDK lets modern LLMs drive their own behavior, making agents more resilient and adaptable.
+- [Introducing Strands Agents 1.0: Production-Ready Multi-Agent Orchestration Made Simple](https://strandsagents.com/blog/strands-agents-1-0/index.md): Strands Agents 1.0 brings multi-agent patterns, A2A protocol support, and production-ready features to the open source SDK.
+- [Using Strands Agents with Claude 4 Interleaved Thinking](https://strandsagents.com/blog/interleaved-thinking-claude-4/index.md): Learn how to use Claude 4's interleaved thinking beta feature with Strands Agents for faster, more fluid reasoning and reduced tool calls.
+- [Introducing Strands Agents, an Open Source AI Agents SDK](https://strandsagents.com/blog/introducing-strands-agents/index.md): Strands Agents is an open source SDK that takes a model-driven approach to building and running AI agents in just a few lines of code.
+
+## Changelog
+
+- [Changelog](https://strandsagents.com/changelog/index.md): All releases across the SDK and Evals SDK
+- SDK Python
+  - [v1.57.1](https://strandsagents.com/changelog/sdk/python-v1.57.1/index.md): SDK Python v1.57.1 (2026-09-25)
+  - [v1.57.0](https://strandsagents.com/changelog/sdk/python-v1.57.0/index.md): SDK Python v1.57.0 (2026-09-22)
+  - [v1.56.0](https://strandsagents.com/changelog/sdk/python-v1.56.0/index.md): SDK Python v1.56.0 (2026-09-15)
+  - [v1.55.1](https://strandsagents.com/changelog/sdk/python-v1.55.1/index.md): SDK Python v1.55.1 (2026-09-09)
+  - [v1.55.0](https://strandsagents.com/changelog/sdk/python-v1.55.0/index.md): SDK Python v1.55.0 (2026-09-08)
+  - [v1.54.0](https://strandsagents.com/changelog/sdk/python-v1.54.0/index.md): SDK Python v1.54.0 (2026-08-27)
+  - [v1.53.0](https://strandsagents.com/changelog/sdk/python-v1.53.0/index.md): SDK Python v1.53.0 (2026-08-21)
+  - [v1.52.0](https://strandsagents.com/changelog/sdk/python-v1.52.0/index.md): SDK Python v1.52.0 (2026-08-12)
+  - [v1.51.0](https://strandsagents.com/changelog/sdk/python-v1.51.0/index.md): SDK Python v1.51.0 (2026-08-07)
+  - [v1.50.2](https://strandsagents.com/changelog/sdk/python-v1.50.2/index.md): SDK Python v1.50.2 (2026-07-27)
+  - [v1.50.1](https://strandsagents.com/changelog/sdk/python-v1.50.1/index.md): SDK Python v1.50.1 (2026-07-24)
+  - [v1.50.0](https://strandsagents.com/changelog/sdk/python-v1.50.0/index.md): SDK Python v1.50.0 (2026-07-24)
+  - [v1.48.0](https://strandsagents.com/changelog/sdk/python-v1.48.0/index.md): SDK Python v1.48.0 (2026-07-17)
+  - [v1.47.0](https://strandsagents.com/changelog/sdk/python-v1.47.0/index.md): SDK Python v1.47.0 (2026-07-10)
+  - [v1.46.0](https://strandsagents.com/changelog/sdk/python-v1.46.0/index.md): SDK Python v1.46.0 (2026-07-07)
+  - [v1.45.0](https://strandsagents.com/changelog/sdk/python-v1.45.0/index.md): SDK Python v1.45.0 (2026-06-25)
+  - [v1.44.0](https://strandsagents.com/changelog/sdk/python-v1.44.0/index.md): SDK Python v1.44.0 (2026-06-16)
+  - [v1.43.0](https://strandsagents.com/changelog/sdk/python-v1.43.0/index.md): SDK Python v1.43.0 (2026-06-12)
+  - [v1.42.0](https://strandsagents.com/changelog/sdk/python-v1.42.0/index.md): SDK Python v1.42.0 (2026-06-01)
+  - [v1.41.0](https://strandsagents.com/changelog/sdk/python-v1.41.0/index.md): SDK Python v1.41.0 (2026-05-21)
+  - [v1.40.0](https://strandsagents.com/changelog/sdk/python-v1.40.0/index.md): SDK Python v1.40.0 (2026-05-14)
+  - [v1.39.0](https://strandsagents.com/changelog/sdk/python-v1.39.0/index.md): SDK Python v1.39.0 (2026-05-08)
+  - [v1.38.0](https://strandsagents.com/changelog/sdk/python-v1.38.0/index.md): SDK Python v1.38.0 (2026-04-30)
+  - [v1.37.0](https://strandsagents.com/changelog/sdk/python-v1.37.0/index.md): SDK Python v1.37.0 (2026-04-22)
+  - [v1.36.0](https://strandsagents.com/changelog/sdk/python-v1.36.0/index.md): SDK Python v1.36.0 (2026-04-17)
+  - [v1.35.0](https://strandsagents.com/changelog/sdk/python-v1.35.0/index.md): SDK Python v1.35.0 (2026-04-08)
+  - [v1.34.1](https://strandsagents.com/changelog/sdk/python-v1.34.1/index.md): SDK Python v1.34.1 (2026-04-01)
+  - [v1.34.0](https://strandsagents.com/changelog/sdk/python-v1.34.0/index.md): SDK Python v1.34.0 (2026-03-31)
+  - [v1.33.0](https://strandsagents.com/changelog/sdk/python-v1.33.0/index.md): SDK Python v1.33.0 (2026-03-24)
+  - [v1.32.0](https://strandsagents.com/changelog/sdk/python-v1.32.0/index.md): SDK Python v1.32.0 (2026-03-20)
+  - [v1.31.0](https://strandsagents.com/changelog/sdk/python-v1.31.0/index.md): SDK Python v1.31.0 (2026-03-19)
+  - [v1.30.0](https://strandsagents.com/changelog/sdk/python-v1.30.0/index.md): SDK Python v1.30.0 (2026-03-11)
+  - [v1.29.0](https://strandsagents.com/changelog/sdk/python-v1.29.0/index.md): SDK Python v1.29.0 (2026-03-04)
+  - [v1.28.0](https://strandsagents.com/changelog/sdk/python-v1.28.0/index.md): SDK Python v1.28.0 (2026-02-25)
+  - [v1.27.0](https://strandsagents.com/changelog/sdk/python-v1.27.0/index.md): SDK Python v1.27.0 (2026-02-19)
+  - [v1.26.0](https://strandsagents.com/changelog/sdk/python-v1.26.0/index.md): SDK Python v1.26.0 (2026-02-11)
+  - [v1.25.0](https://strandsagents.com/changelog/sdk/python-v1.25.0/index.md): SDK Python v1.25.0 (2026-02-05)
+  - [v1.24.0](https://strandsagents.com/changelog/sdk/python-v1.24.0/index.md): SDK Python v1.24.0 (2026-01-29)
+  - [v1.23.0](https://strandsagents.com/changelog/sdk/python-v1.23.0/index.md): SDK Python v1.23.0 (2026-01-21)
+  - [v1.22.0](https://strandsagents.com/changelog/sdk/python-v1.22.0/index.md): SDK Python v1.22.0 (2026-01-13)
+  - [v1.21.0](https://strandsagents.com/changelog/sdk/python-v1.21.0/index.md): SDK Python v1.21.0 (2026-01-02)
+  - [v1.20.0](https://strandsagents.com/changelog/sdk/python-v1.20.0/index.md): SDK Python v1.20.0 (2025-12-15)
+  - [v1.19.0](https://strandsagents.com/changelog/sdk/python-v1.19.0/index.md): SDK Python v1.19.0 (2025-12-03)
+  - [v1.18.0](https://strandsagents.com/changelog/sdk/python-v1.18.0/index.md): SDK Python v1.18.0 (2025-11-21)
+  - [v1.17.0](https://strandsagents.com/changelog/sdk/python-v1.17.0/index.md): SDK Python v1.17.0 (2025-11-18)
+  - [v1.16.0](https://strandsagents.com/changelog/sdk/python-v1.16.0/index.md): SDK Python v1.16.0 (2025-11-12)
+  - [v1.15.0](https://strandsagents.com/changelog/sdk/python-v1.15.0/index.md): SDK Python v1.15.0 (2025-11-04)
+  - [v1.14.0](https://strandsagents.com/changelog/sdk/python-v1.14.0/index.md): SDK Python v1.14.0 (2025-10-29)
+  - [v1.13.0](https://strandsagents.com/changelog/sdk/python-v1.13.0/index.md): SDK Python v1.13.0 (2025-10-17)
+  - [v1.12.0](https://strandsagents.com/changelog/sdk/python-v1.12.0/index.md): SDK Python v1.12.0 (2025-10-10)
+  - [v1.11.0](https://strandsagents.com/changelog/sdk/python-v1.11.0/index.md): SDK Python v1.11.0 (2025-10-08)
+  - [v1.10.0](https://strandsagents.com/changelog/sdk/python-v1.10.0/index.md): SDK Python v1.10.0 (2025-09-29)
+  - [v1.9.1](https://strandsagents.com/changelog/sdk/python-v1.9.1/index.md): SDK Python v1.9.1 (2025-09-19)
+  - [v1.9.0](https://strandsagents.com/changelog/sdk/python-v1.9.0/index.md): SDK Python v1.9.0 (2025-09-17)
+  - [v1.8.0](https://strandsagents.com/changelog/sdk/python-v1.8.0/index.md): SDK Python v1.8.0 (2025-09-10)
+  - [v1.7.1](https://strandsagents.com/changelog/sdk/python-v1.7.1/index.md): SDK Python v1.7.1 (2025-09-05)
+  - [v1.7.0](https://strandsagents.com/changelog/sdk/python-v1.7.0/index.md): SDK Python v1.7.0 (2025-09-02)
+  - [v1.6.0](https://strandsagents.com/changelog/sdk/python-v1.6.0/index.md): SDK Python v1.6.0 (2025-08-26)
+  - [v1.5.0](https://strandsagents.com/changelog/sdk/python-v1.5.0/index.md): SDK Python v1.5.0 (2025-08-19)
+  - [v1.4.0](https://strandsagents.com/changelog/sdk/python-v1.4.0/index.md): SDK Python v1.4.0 (2025-08-08)
+  - [v1.3.0](https://strandsagents.com/changelog/sdk/python-v1.3.0/index.md): SDK Python v1.3.0 (2025-08-04)
+  - [v1.2.0](https://strandsagents.com/changelog/sdk/python-v1.2.0/index.md): SDK Python v1.2.0 (2025-07-30)
+  - [v1.1.0](https://strandsagents.com/changelog/sdk/python-v1.1.0/index.md): SDK Python v1.1.0 (2025-07-24)
+  - [v1.0.1](https://strandsagents.com/changelog/sdk/python-v1.0.1/index.md): SDK Python v1.0.1 (2025-07-18)
+  - [v1.0.0](https://strandsagents.com/changelog/sdk/python-v1.0.0/index.md): SDK Python v1.0.0 (2025-07-15)
+  - [v0.3.0](https://strandsagents.com/changelog/sdk/python-v0.3.0/index.md): SDK Python v0.3.0 (2025-07-11)
+  - [v0.2.1](https://strandsagents.com/changelog/sdk/python-v0.2.1/index.md): SDK Python v0.2.1 (2025-07-04)
+  - [v0.2.0](https://strandsagents.com/changelog/sdk/python-v0.2.0/index.md): SDK Python v0.2.0 (2025-07-02)
+  - [v0.1.9](https://strandsagents.com/changelog/sdk/python-v0.1.9/index.md): SDK Python v0.1.9 (2025-06-24)
+  - [v0.1.8](https://strandsagents.com/changelog/sdk/python-v0.1.8/index.md): SDK Python v0.1.8 (2025-06-18)
+  - [v0.1.7](https://strandsagents.com/changelog/sdk/python-v0.1.7/index.md): SDK Python v0.1.7 (2025-06-09)
+  - [v0.1.6](https://strandsagents.com/changelog/sdk/python-v0.1.6/index.md): SDK Python v0.1.6 (2025-05-30)
+  - [v0.1.5](https://strandsagents.com/changelog/sdk/python-v0.1.5/index.md): SDK Python v0.1.5 (2025-05-26)
+  - [v0.1.4](https://strandsagents.com/changelog/sdk/python-v0.1.4/index.md): SDK Python v0.1.4 (2025-05-23)
+  - [v0.1.3](https://strandsagents.com/changelog/sdk/python-v0.1.3/index.md): SDK Python v0.1.3 (2025-05-21)
+  - [v0.1.2](https://strandsagents.com/changelog/sdk/python-v0.1.2/index.md): SDK Python v0.1.2 (2025-05-18)
+  - [v0.1.1](https://strandsagents.com/changelog/sdk/python-v0.1.1/index.md): SDK Python v0.1.1 (2025-05-17)
+  - [v0.1.0](https://strandsagents.com/changelog/sdk/python-v0.1.0/index.md): SDK Python v0.1.0 (2025-05-16)
+- SDK TypeScript
+  - [v1.19.0](https://strandsagents.com/changelog/sdk/typescript-v1.19.0/index.md): SDK TypeScript v1.19.0 (2026-09-22)
+  - [v1.18.0](https://strandsagents.com/changelog/sdk/typescript-v1.18.0/index.md): SDK TypeScript v1.18.0 (2026-09-15)
+  - [v1.17.0](https://strandsagents.com/changelog/sdk/typescript-v1.17.0/index.md): SDK TypeScript v1.17.0 (2026-09-08)
+  - [v1.16.0](https://strandsagents.com/changelog/sdk/typescript-v1.16.0/index.md): SDK TypeScript v1.16.0 (2026-08-31)
+  - [v1.15.0](https://strandsagents.com/changelog/sdk/typescript-v1.15.0/index.md): SDK TypeScript v1.15.0 (2026-08-27)
+  - [v1.14.0](https://strandsagents.com/changelog/sdk/typescript-v1.14.0/index.md): SDK TypeScript v1.14.0 (2026-08-21)
+  - [v1.13.0](https://strandsagents.com/changelog/sdk/typescript-v1.13.0/index.md): SDK TypeScript v1.13.0 (2026-08-12)
+  - [v1.12.0](https://strandsagents.com/changelog/sdk/typescript-v1.12.0/index.md): SDK TypeScript v1.12.0 (2026-08-07)
+  - [v1.11.2](https://strandsagents.com/changelog/sdk/typescript-v1.11.2/index.md): SDK TypeScript v1.11.2 (2026-07-27)
+  - [v1.11.1](https://strandsagents.com/changelog/sdk/typescript-v1.11.1/index.md): SDK TypeScript v1.11.1 (2026-07-24)
+  - [v1.11.0](https://strandsagents.com/changelog/sdk/typescript-v1.11.0/index.md): SDK TypeScript v1.11.0 (2026-07-24)
+  - [v1.10.0](https://strandsagents.com/changelog/sdk/typescript-v1.10.0/index.md): SDK TypeScript v1.10.0 (2026-07-17)
+  - [v1.9.0](https://strandsagents.com/changelog/sdk/typescript-v1.9.0/index.md): SDK TypeScript v1.9.0 (2026-07-10)
+  - [v1.8.0](https://strandsagents.com/changelog/sdk/typescript-v1.8.0/index.md): SDK TypeScript v1.8.0 (2026-07-08)
+  - [v1.7.0](https://strandsagents.com/changelog/sdk/typescript-v1.7.0/index.md): SDK TypeScript v1.7.0 (2026-06-25)
+  - [v1.6.0](https://strandsagents.com/changelog/sdk/typescript-v1.6.0/index.md): SDK TypeScript v1.6.0 (2026-06-16)
+  - [v1.5.0](https://strandsagents.com/changelog/sdk/typescript-v1.5.0/index.md): SDK TypeScript v1.5.0 (2026-06-12)
+  - [v1.4.0](https://strandsagents.com/changelog/sdk/typescript-v1.4.0/index.md): SDK TypeScript v1.4.0 (2026-06-01)
+  - [v1.3.0](https://strandsagents.com/changelog/sdk/typescript-v1.3.0/index.md): SDK TypeScript v1.3.0 (2026-05-21)
+  - [v1.2.0](https://strandsagents.com/changelog/sdk/typescript-v1.2.0/index.md): SDK TypeScript v1.2.0 (2026-05-14)
+  - [v1.1.0](https://strandsagents.com/changelog/sdk/typescript-v1.1.0/index.md): SDK TypeScript v1.1.0 (2026-05-08)
+  - [v1.0.0](https://strandsagents.com/changelog/sdk/typescript-v1.0.0/index.md): SDK TypeScript v1.0.0 (2026-04-30)
+  - [v1.0.0-rc.5](https://strandsagents.com/changelog/sdk/typescript-v1.0.0-rc.5/index.md): SDK TypeScript v1.0.0-rc.5 (2026-04-22)
+  - [v1.0.0-rc.4](https://strandsagents.com/changelog/sdk/typescript-v1.0.0-rc.4/index.md): SDK TypeScript v1.0.0-rc.4 (2026-04-17)
+  - [v1.0.0-rc.3](https://strandsagents.com/changelog/sdk/typescript-v1.0.0-rc.3/index.md): SDK TypeScript v1.0.0-rc.3 (2026-04-08)
+  - [v1.0.0-rc.2](https://strandsagents.com/changelog/sdk/typescript-v1.0.0-rc.2/index.md): SDK TypeScript v1.0.0-rc.2 (2026-03-31)
+  - [v1.0.0-rc.1](https://strandsagents.com/changelog/sdk/typescript-v1.0.0-rc.1/index.md): SDK TypeScript v1.0.0-rc.1 (2026-03-26)
+  - [v1.0.0-rc.0](https://strandsagents.com/changelog/sdk/typescript-v1.0.0-rc.0/index.md): SDK TypeScript v1.0.0-rc.0 (2026-03-26)
+  - [v0.7.0](https://strandsagents.com/changelog/sdk/typescript-v0.7.0/index.md): SDK TypeScript v0.7.0 (2026-03-19)
+  - [v0.6.0](https://strandsagents.com/changelog/sdk/typescript-v0.6.0/index.md): SDK TypeScript v0.6.0 (2026-03-11)
+  - [v0.5.0](https://strandsagents.com/changelog/sdk/typescript-v0.5.0/index.md): SDK TypeScript v0.5.0 (2026-03-04)
+  - [v0.4.0](https://strandsagents.com/changelog/sdk/typescript-v0.4.0/index.md): SDK TypeScript v0.4.0 (2026-02-25)
+  - [v0.3.0](https://strandsagents.com/changelog/sdk/typescript-v0.3.0/index.md): SDK TypeScript v0.3.0 (2026-02-19)
+  - [v0.2.2](https://strandsagents.com/changelog/sdk/typescript-v0.2.2/index.md): SDK TypeScript v0.2.2 (2026-02-11)
+  - [v0.2.1](https://strandsagents.com/changelog/sdk/typescript-v0.2.1/index.md): SDK TypeScript v0.2.1 (2026-02-05)
+  - [v0.2.0](https://strandsagents.com/changelog/sdk/typescript-v0.2.0/index.md): SDK TypeScript v0.2.0 (2026-01-29)
+  - [v0.1.6](https://strandsagents.com/changelog/sdk/typescript-v0.1.6/index.md): SDK TypeScript v0.1.6 (2026-01-21)
+  - [v0.1.5](https://strandsagents.com/changelog/sdk/typescript-v0.1.5/index.md): SDK TypeScript v0.1.5 (2026-01-13)
+  - [v0.1.4](https://strandsagents.com/changelog/sdk/typescript-v0.1.4/index.md): SDK TypeScript v0.1.4 (2026-01-02)
+  - [v0.1.3](https://strandsagents.com/changelog/sdk/typescript-v0.1.3/index.md): SDK TypeScript v0.1.3 (2025-12-15)
+  - [v0.1.2](https://strandsagents.com/changelog/sdk/typescript-v0.1.2/index.md): SDK TypeScript v0.1.2 (2025-12-04)
+  - [v0.1.1](https://strandsagents.com/changelog/sdk/typescript-v0.1.1/index.md): SDK TypeScript v0.1.1 (2025-12-03)
+  - [v0.1.0](https://strandsagents.com/changelog/sdk/typescript-v0.1.0/index.md): SDK TypeScript v0.1.0 (2025-12-03)
+- Evals
+  - [v1.4.0](https://strandsagents.com/changelog/evals/v1.4.0/index.md): Evals v1.4.0 (2026-09-22)
+  - [v1.3.0](https://strandsagents.com/changelog/evals/v1.3.0/index.md): Evals v1.3.0 (2026-09-15)
+  - [v1.2.0](https://strandsagents.com/changelog/evals/v1.2.0/index.md): Evals v1.2.0 (2026-08-21)
+  - [v1.1.1](https://strandsagents.com/changelog/evals/v1.1.1/index.md): Evals v1.1.1 (2026-08-12)
+  - [v1.1.0](https://strandsagents.com/changelog/evals/v1.1.0/index.md): Evals v1.1.0 (2026-08-07)
+  - [v1.0.3](https://strandsagents.com/changelog/evals/v1.0.3/index.md): Evals v1.0.3 (2026-07-23)
+  - [v1.0.2](https://strandsagents.com/changelog/evals/v1.0.2/index.md): Evals v1.0.2 (2026-07-09)
+  - [v1.0.1](https://strandsagents.com/changelog/evals/v1.0.1/index.md): Evals v1.0.1 (2026-06-25)
+  - [v1.0.0](https://strandsagents.com/changelog/evals/v1.0.0/index.md): Evals v1.0.0 (2026-06-16)
+  - [v0.3.0](https://strandsagents.com/changelog/evals/v0.3.0/index.md): Evals v0.3.0 (2026-06-12)
+  - [v0.2.1](https://strandsagents.com/changelog/evals/v0.2.1/index.md): Evals v0.2.1 (2026-05-29)
+  - [v0.2.0](https://strandsagents.com/changelog/evals/v0.2.0/index.md): Evals v0.2.0 (2026-05-14)
+  - [v0.1.17](https://strandsagents.com/changelog/evals/v0.1.17/index.md): Evals v0.1.17 (2026-05-08)
+  - [v0.1.16](https://strandsagents.com/changelog/evals/v0.1.16/index.md): Evals v0.1.16 (2026-04-30)
+  - [v0.1.15](https://strandsagents.com/changelog/evals/v0.1.15/index.md): Evals v0.1.15 (2026-04-17)
+  - [v0.1.14](https://strandsagents.com/changelog/evals/v0.1.14/index.md): Evals v0.1.14 (2026-04-08)
+  - [v0.1.13](https://strandsagents.com/changelog/evals/v0.1.13/index.md): Evals v0.1.13 (2026-03-31)
+  - [v0.1.12](https://strandsagents.com/changelog/evals/v0.1.12/index.md): Evals v0.1.12 (2026-03-26)
+  - [v0.1.11](https://strandsagents.com/changelog/evals/v0.1.11/index.md): Evals v0.1.11 (2026-03-19)
+  - [v0.1.10](https://strandsagents.com/changelog/evals/v0.1.10/index.md): Evals v0.1.10 (2026-03-11)
+  - [v0.1.9](https://strandsagents.com/changelog/evals/v0.1.9/index.md): Evals v0.1.9 (2026-03-04)
+  - [v0.1.8](https://strandsagents.com/changelog/evals/v0.1.8/index.md): Evals v0.1.8 (2026-02-25)
+  - [v0.1.7](https://strandsagents.com/changelog/evals/v0.1.7/index.md): Evals v0.1.7 (2026-02-19)
+  - [v0.1.6](https://strandsagents.com/changelog/evals/v0.1.6/index.md): Evals v0.1.6 (2026-02-11)
+  - [v0.1.5](https://strandsagents.com/changelog/evals/v0.1.5/index.md): Evals v0.1.5 (2026-02-05)
+  - [v0.1.4](https://strandsagents.com/changelog/evals/v0.1.4/index.md): Evals v0.1.4 (2026-01-29)
+  - [v0.1.3](https://strandsagents.com/changelog/evals/v0.1.3/index.md): Evals v0.1.3 (2026-01-21)
+  - [v0.1.2](https://strandsagents.com/changelog/evals/v0.1.2/index.md): Evals v0.1.2 (2026-01-13)
+  - [v0.1.1](https://strandsagents.com/changelog/evals/v0.1.1/index.md): Evals v0.1.1 (2025-12-15)
+  - [v0.1.0](https://strandsagents.com/changelog/evals/v0.1.0/index.md): Evals v0.1.0 (2025-12-03)

@@ -12,10 +12,11 @@ if [ -n "$bad_files" ]; then
   fail=1
 fi
 
-# 2. Added lines that look like secrets
-pattern='sk-or-v1-[A-Za-z0-9]{20,}|sk-(proj-|ant-)?[A-Za-z0-9_-]{20,}|pa-[A-Za-z0-9_-]{30,}|mongodb(\+srv)?://[^<:/@[:space:]]+:[^<@[:space:]]+@'
+# 2. Added lines that look like secrets (docs/refs/ holds third-party doc snapshots with placeholder creds)
+pattern='(^|[^A-Za-z0-9_-])(sk-or-v1-[A-Za-z0-9]{20,}|sk-(proj-|ant-)?[A-Za-z0-9_-]{20,}|pa-[A-Za-z0-9_-]{30,})|mongodb(\+srv)?://[^<:/@[:space:]]+:[^<@[:space:]]+@'
 hits=$(git diff --cached -U0 --no-color | awk '
-  /^\+\+\+ / { file = substr($0, 7); next }
+  /^\+\+\+ / { file = substr($0, 7); skip = (file ~ /^docs\/refs\//); next }
+  skip       { next }
   /^\+/      { print file ": " substr($0, 2) }
 ' | grep -E "$pattern")
 if [ -n "$hits" ]; then
