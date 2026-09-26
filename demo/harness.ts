@@ -425,6 +425,14 @@ async function main() {
     if (t.name !== "checkpoint") return t;
     doCheckpoint = async (args: any) => {
         checkpointOwed = false;
+        // The bearing is measured, not claimed: stamp tests_passing from the harness's last real test run.
+        if (lastReport) {
+          const claimed = (args.bearings_current ?? []).find((b: any) => b.name === "tests_passing")?.current;
+          if (claimed !== lastReport.pass) {
+            args = { ...args, bearings_current: [{ name: "tests_passing", current: lastReport.pass }] };
+            log(dim(`  ⛨ bearing stamped from the last test run: tests_passing=${lastReport.pass}${claimed == null ? " (model omitted it)" : ` (model said ${claimed})`}`));
+          }
+        }
         const raw = textOf(await t.invoke(args));
         const j = parse(raw);
         if (j.error) return raw;
