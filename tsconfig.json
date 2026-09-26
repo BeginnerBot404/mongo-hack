@@ -25,5 +25,6 @@
     "noUnusedLocals": false,
     "noUnusedParameters": false,
     "noPropertyAccessFromIndexSignature": false
-  }
+  },
+  "exclude": ["node_modules", "flight-recorder", "demo/fixture", "demo/fixture-template", "demo/hermes/.home"]
 }

@@ -79,6 +79,6 @@ export interface HarnessSettings {
 export const SEED_SETTINGS: HarnessSettings = {
   prompt_fragments: ["checkpoint_every_test", "read_policies_first"],
   required_tools: ["checkpoint"],
-  sentinel_threshold: 0.6,
+  sentinel_threshold: 0.25, // a lone regression (trend weight 0.3) must tap; similarity + recurrence raise it further
   model: "z-ai/glm-5.3-flash",
 };
