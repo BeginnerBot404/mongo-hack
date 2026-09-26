@@ -2,7 +2,7 @@
 // Flight recorder: one live view over the waypoints DB via /api/stream (SSE).
 // Presenter mode is the default (?present=0 shows more detail). ?objective=<id> pins one objective. ?demoFixture=1 replays a script locally.
 import { useEffect, useMemo, useRef, useState } from "react";
-import { fixture } from "./fixture";
+import { fixture, fixtureOutreach } from "./fixture";
 
 type Doc = Record<string, any>;
 type State = {
@@ -347,7 +347,7 @@ function useParams() {
     setP({
       present: q.get("present") !== "0",
       objective: q.get("objective"),
-      fixture: q.get("demoFixture") === "1",
+      fixture: q.get("demoFixture") === "1" || q.get("demoFixture") === "outreach",
       replay: q.get("replay") === "1",
       speed: Math.max(1, Number(q.get("speed") ?? 20) || 20),
       since: q.get("since"),
@@ -380,7 +380,8 @@ function useStream(objective: string | null, fx: boolean, ready: boolean, replay
       };
     }
     if (fx) {
-      const { snapshot, steps } = fixture(Date.now());
+      const kind = typeof location !== "undefined" ? new URLSearchParams(location.search).get("demoFixture") : null;
+      const { snapshot, steps } = (kind === "outreach" ? fixtureOutreach : fixture)(Date.now());
       setS({ ...EMPTY, ...(snapshot as Partial<State>) });
       setStatus("live");
       setLoaded(true);
@@ -713,7 +714,7 @@ const PROBLEM: Record<string, string> = {
 };
 const problemName = (cls: string) => PROBLEM[cls.replace(/-/g, "_")] ?? cls.replace(/[-_]/g, " ");
 const scoreLabel = (name?: string) =>
-  name === "holdout_auc" ? "score on deals it has never seen" : name === "a_grade_win_rate" ? "win rate of A-graded deals" : name === "tests_passing" ? "tests passing" : pretty(name);
+  name === "qa_pass_rate" ? "first-try QA pass rate" : name === "holdout_auc" ? "score on deals it has never seen" : name === "a_grade_win_rate" ? "win rate of A-graded deals" : name === "tests_passing" ? "tests passing" : pretty(name);
 const ago = (at: number, now: number) => {
   const sec = Math.max(0, Math.round((now - at) / 1000));
   return sec < 60 ? `${sec}s ago` : sec < 3600 ? `${Math.round(sec / 60)} min ago` : `${Math.round(sec / 3600)} h ago`;
@@ -748,9 +749,85 @@ function problemInWords(f: Doc, s: State, primary?: string, unit?: string): stri
   return `It hit a problem: ${one(f.failure).slice(0, 140)}`;
 }
 
+// ---------- outreach task (docs/OUTREACH-PACK.md) ----------
+const isOutreachObj = (o: Doc | null | undefined) =>
+  !!o && (o.task === "outreach" || o.end_state?.bearing === "qa_pass_rate" || ((o.bearings ?? []) as Doc[]).some((b) => b.name === "qa_pass_rate"));
+const OUT_PROBLEM: Record<string, string> = {
+  invented_fact: "invented facts",
+  missing_personalization: "generic openings",
+  forbidden_promise: "forbidden promises",
+  placeholder_left: "leftover placeholders",
+  too_long: "over-long emails",
+  missing_cta: "missing asks",
+  missing_subject: "bad subject lines",
+  stall: "a stalled pass rate",
+};
+function outreachProblem(f: Doc): string {
+  const cls = fclass(f);
+  const txt = one(`${f.failure ?? ""} ${f.context ?? ""} ${f.detail ?? ""}`);
+  if (cls === "invented_fact") {
+    const what = /revenue|\$|musd|million/i.test(txt) ? "a revenue figure" : /employ|headcount|staff/i.test(txt) ? "a headcount" : /parent|subsidiar/i.test(txt) ? "a parent company" : /year|founded|established|\b(19|20)\d\d\b/i.test(txt) ? "a founding year" : /location|city|office|based/i.test(txt) ? "a location" : "a fact";
+    return `It stated ${what} that isn't in the account record — an invented fact.`;
+  }
+  if (cls === "missing_personalization") return "Its opening line could have gone to anyone — nothing specific about the account.";
+  if (cls === "forbidden_promise") return "It made a promise sales can't make (\"free\", \"guarantee\", a discount).";
+  if (cls === "placeholder_left") return "It left a template placeholder like [Name] in the email.";
+  if (cls === "too_long") return "The email ran past the 120-word limit.";
+  if (cls === "missing_cta") return "It never asked for a call at the end.";
+  if (cls === "missing_subject") return "The subject line was missing or too long.";
+  if (cls === "stall") return "The pass rate stopped improving.";
+  if (cls === "skipped_checkpoint") return "It skipped saving its progress. The harness saved it anyway and logged it.";
+  if (cls === "regression") return "The pass rate dropped after its last change. Caught automatically.";
+  return `It hit a problem: ${txt.slice(0, 140)}`;
+}
+const OUT_RULES: Record<string, string> = { open_with_record_fact: "open with one fact from the record", plain_cta: "end with one short question asking for a 15-minute call" };
+const CTX_WORDS: Record<string, string> = { account_record_full: "the full account record", account_summary: "an account summary", product_catalog: "the product catalog", account_name: "the account name" };
+const TOOL_WORDS: Record<string, string> = { outline_email: "an outline tool", lookup_account: "an account lookup tool", precheck_email: "a pre-send check" };
+const arr = (x: unknown): string[] => (Array.isArray(x) ? x.map(String) : []);
+/** The settings delta of one harness_config version, as {axis, words}. */
+function outreachChange(c: Doc, cfgs: Doc[]): { axis: string; words: string } | null {
+  const parent = cfgs.find((x) => x.version === c.parent_version);
+  const a: Doc = parent?.settings ?? {};
+  const b: Doc = c.settings ?? {};
+  const plus = (k: string) => arr(b[k]).filter((x) => !arr(a[k]).includes(x));
+  const minus = (k: string) => arr(a[k]).filter((x) => !arr(b[k]).includes(x));
+  if (plus("required_tools").includes("precheck_email") || (plus("granted_tools").includes("precheck_email")))
+    return { axis: "Guardrail", words: "it gave itself a pre-send check and must use it." };
+  if (plus("context_sources").length) {
+    const x = plus("context_sources")[0]!;
+    return { axis: "Context policy", words: x === "account_record_full" ? "it now reads the full account record before writing." : `it now also reads ${CTX_WORDS[x] ?? x}.` };
+  }
+  if (plus("granted_tools").length) return { axis: "Tool access", words: `it gave itself ${TOOL_WORDS[plus("granted_tools")[0]!] ?? plus("granted_tools")[0]}.` };
+  if (plus("prompt_fragments").length) { const x = plus("prompt_fragments")[0]!; return { axis: "Rules", words: `added '${OUT_RULES[x] ?? play(x)}'.` }; }
+  if (minus("prompt_fragments").length) { const x = minus("prompt_fragments")[0]!; return { axis: "Rules", words: `dropped '${OUT_RULES[x] ?? play(x)}'.` }; }
+  if (a.reasoning !== b.reasoning && b.reasoning != null) return { axis: "Reasoning", words: `switched thinking ${b.reasoning}.` };
+  if (minus("context_sources").length) return { axis: "Context policy", words: `it stopped reading ${CTX_WORDS[minus("context_sources")[0]!] ?? minus("context_sources")[0]}.` };
+  if (minus("granted_tools").length) return { axis: "Tool access", words: `it gave up ${TOOL_WORDS[minus("granted_tools")[0]!] ?? minus("granted_tools")[0]}.` };
+  if (a.model !== b.model) return { axis: "Model", words: `switched to ${b.model}.` };
+  return null;
+}
+/** Compact "harness shape" strip under the goal line. */
+function ShapeStrip({ cfg }: { cfg: Doc | null }) {
+  const st: Doc = cfg?.settings ?? {};
+  if (!cfg) return null;
+  const guards = arr(st.required_tools).filter((x) => x !== "checkpoint");
+  const tools = arr(st.granted_tools);
+  return (
+    <div className="shape">
+      <span className="shv">harness v{cfg.version}{cfg.status === "probation" ? " (trial)" : ""}</span>
+      <span>rules <b>{arr(st.prompt_fragments).length}</b></span>
+      {st.context_sources && <span>context [<b>{arr(st.context_sources).join(", ")}</b>]</span>}
+      {st.granted_tools && <span>tools [<b>{tools.join(", ") || "—"}</b>]</span>}
+      <span>guardrails [<b>{guards.join(", ") || "—"}</b>]</span>
+      {st.reasoning != null && <span>reasoning <b className={st.reasoning === "on" ? "good" : ""}>{st.reasoning}</b></span>}
+    </div>
+  );
+}
+
 function Story({ s, primary, target, unit, down, now, curCfgs }: { s: State; primary?: string; target: number; unit?: string; down: boolean; now: number; curCfgs: Doc[] }) {
   const o = s.objective!;
-  const sales = primary === "holdout_auc" || s.rubrics.length > 0;
+  const outreach = isOutreachObj(o);
+  const sales = !outreach && (primary === "holdout_auc" || s.rubrics.length > 0);
   const vals = s.checkpoints.map((c) => bearingOf(c, primary).current).filter((x): x is number => x !== null);
   const first = vals[0] ?? (s.rubrics[0]?.metrics?.holdout?.auc as number | undefined) ?? null;
   const last = vals[vals.length - 1] ?? (s.rubrics[s.rubrics.length - 1]?.metrics?.holdout?.auc as number | undefined) ?? null;
@@ -773,29 +850,52 @@ function Story({ s, primary, target, unit, down, now, curCfgs }: { s: State; pri
   const wm = /v\d+:\s*(\d+)\s+([\w-]+)\s+in\s+(\d+)[^→]*→\s*v\d+:\s*(\d+)\s+in\s+(\d+)/.exec(String(change?.outcome?.why ?? ""));
   const watch = change?.probation?.watch_class ? problemName(change.probation.watch_class) : wm ? problemName(wm[2]) : "the problem";
   const active = verdict ? 4 : change ? 3 : lastFail ? 2 : 1;
+  const oc = outreach && change ? outreachChange(change, curCfgs) : null;
+  const lastCp = s.checkpoints[s.checkpoints.length - 1];
+  const acc = bearingOf(lastCp, "accounts_done");
+  const accTarget = acc.target ?? ((o.bearings ?? []) as Doc[]).find((b) => b.name === "accounts_done")?.target ?? null;
+  const pr = s.checkpoints.map((c) => bearingOf(c, "qa_pass_rate").current).filter((x): x is number => x !== null);
+  const outWatch = change?.probation?.watch_class ? OUT_PROBLEM[fclass({ class: change.probation.watch_class })] ?? problemName(change.probation.watch_class) : "the problem";
   return (
     <div className="story">
       <div className={`sbox ${active === 1 ? "hot" : ""}`}>
         <div className="snum">1 · THE WORK</div>
         <div className="stext">
-          {sales ? "The agent is improving a deal-scoring rubric." : `The agent is working on: ${one(o.objective)}`}
+          {outreach ? "An SDR agent is working a queue of real accounts; a deterministic QA gate grades every email." : sales ? "The agent is improving a deal-scoring rubric." : `The agent is working on: ${one(o.objective)}`}
         </div>
+        {outreach ? (
+          <div className="sbig">
+            Writing first-touch emails: <b>{acc.current ?? 0}</b> of {accTarget ?? "?"} accounts done · pass rate <b className="bad">{pr.length ? `${Math.round(pr[0]!)}%` : "—"}</b> → <b className={(pr[pr.length - 1] ?? 0) >= target ? "good" : ""}>{pr.length ? `${Math.round(pr[pr.length - 1]!)}%` : "—"}</b>
+            <span className="sgoal"> (goal ≥ {fmtB(target, unit)} first-try — locked)</span>
+          </div>
+        ) : (
         <div className="sbig">
           {scoreLabel(primary)}: <b className="bad">{fmtB(first, unit)}</b> → <b className={done ? "good" : ""}>{fmtB(last, unit)}</b>
           <span className="sgoal"> (goal {down ? "≤" : "≥"} {fmtB(target, unit)} — locked)</span>
         </div>
+        )}
         {rubLines.length > 0 && <div className="ssub">Just changed: {rubLines.slice(0, 2).map(ruleInWords).join("; ")}.</div>}
       </div>
       <div className="sarrow">↓</div>
       <div className={`sbox ${active === 2 ? "hot" : ""} ${lastFail ? "warnbox" : ""}`}>
         <div className="snum">2 · WHAT WENT WRONG</div>
-        <div className="stext">{lastFail ? problemInWords(lastFail, s, primary, unit) : "Nothing so far."}</div>
+        <div className="stext">{lastFail ? (outreach ? outreachProblem(lastFail) : problemInWords(lastFail, s, primary, unit)) : "Nothing so far."}</div>
         {lastFail && <div className="ssub">{ago(t(lastFail.created_at), now)} · {fails.length} problem{fails.length === 1 ? "" : "s"} this run</div>}
       </div>
       <div className="sarrow">↓</div>
       <div className={`sbox ${active === 3 ? "hot" : ""} ${change ? "selfbox" : ""}`}>
         <div className="snum">3 · WHAT THE HARNESS CHANGED ABOUT ITSELF</div>
-        {change && d ? (
+        {oc ? (
+          <>
+            <div className="stext">
+              <b className="axis">{oc.axis}:</b> {oc.words}
+            </div>
+            <div className="ssub">
+              {change?.reason?.kind === "tap" && trig ? `Because of ${OUT_PROBLEM[fclass(trig)] ?? problemName(fclass(trig))}. ` : why ? `Because of ${OUT_PROBLEM[why.replace(/-/g, "_")] ?? why}. ` : ""}
+              {change?.probation && !verdict ? `On trial: ${Math.min(since, req)} of ${req} save points checked.` : ""}
+            </div>
+          </>
+        ) : change && d ? (
           <>
             <div className="stext">
               {d.add.length > 0 && <>It added one instruction to its own playbook: <q>{play(d.add[0])}</q></>}
@@ -814,7 +914,12 @@ function Story({ s, primary, target, unit, down, now, curCfgs }: { s: State; pri
       <div className="sarrow">↓</div>
       <div className={`sbox ${active === 4 ? "hot" : ""} ${verdict === "kept" ? "okbox" : verdict ? "badbox" : ""}`}>
         <div className="snum">4 · DID IT WORK?</div>
-        {verdict ? (
+        {verdict && outreach ? (
+          <div className="stext">
+            {change?.outcome?.why ? <>{one(change.outcome.why).replace(/\s*(Kept|Rolled back|Undone)\.?\s*$/i, "")} </> : null}
+            {verdict === "kept" ? <b className="good">Change kept.</b> : <b className="bad">Didn&apos;t help — change automatically undone.</b>}
+          </div>
+        ) : verdict ? (
           <div className="stext">
             {wm ? (
               <>
@@ -824,7 +929,7 @@ function Story({ s, primary, target, unit, down, now, curCfgs }: { s: State; pri
             {verdict === "kept" ? <b className="good">Change kept.</b> : <b className="bad">Didn&apos;t help — change automatically undone.</b>}
           </div>
         ) : change?.probation ? (
-          <div className="stext">Too early to tell — on trial ({Math.min(since, req)} of {req}). It is kept only if the score holds and {watch} don&apos;t come back.</div>
+          <div className="stext">Too early to tell — on trial ({Math.min(since, req)} of {req}). It is kept only if the {outreach ? "pass rate" : "score"} holds and {outreach ? outWatch : watch} don&apos;t come back.</div>
         ) : (
           <div className="stext">No changes to judge yet.</div>
         )}
@@ -1023,6 +1128,7 @@ export default function Page() {
               {alive !== null && !params.fixture && <span className={`badge ${alive ? "alive" : "dead"}`}>{alive ? "agent ● running" : "agent ✖ down"}</span>}
               {params.fixture && alive !== null && <span className={`badge ${alive ? "alive" : "dead"}`}>{alive ? "agent ● running" : "agent ✖ down"}</span>}
             </div>
+            <ShapeStrip cfg={cfg} />
           </>
         )}
       </header>

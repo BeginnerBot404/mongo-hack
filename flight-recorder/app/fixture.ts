@@ -87,3 +87,51 @@ export function fixture(start: number): { snapshot: Doc; steps: FxStep[] } {
   ];
   return { snapshot, steps };
 }
+
+// ?demoFixture=outreach — outreach-shaped script (docs/OUTREACH-PACK.md). Client-side only; never writes to Atlas.
+export function fixtureOutreach(start: number): { snapshot: Doc; steps: FxStep[] } {
+  n = 500;
+  const at = (s: number) => new Date(start + s * 1000).toISOString();
+  const bearing = (rate: number, done: number) => [
+    { name: "qa_pass_rate", current: rate, target: 80, unit: "%" },
+    { name: "accounts_done", current: done, target: 24 },
+  ];
+  const objective = {
+    _id: OBJ, task: "outreach",
+    objective: "Write a first-touch email for every account in the queue that passes QA.",
+    end_state: { bearing: "qa_pass_rate", target: 80, description: "all accounts done and first-try pass rate ≥ 80%" },
+    status: "active", bearings: bearing(0, 0), agent: "waypoints-harness", created_at: at(-60), updated_at: at(-60),
+  };
+  const seed = { prompt_fragments: ["read_policies_first"], required_tools: ["checkpoint"], sentinel_threshold: 0.25, model: "gb10", context_sources: ["account_name", "product_catalog"], granted_tools: [], reasoning: "off" };
+  const v1 = { _id: id(), version: 1, status: "active", settings: seed, parent_version: null, change: null, reason: { kind: "manual_seed", id: null, summary: "Seed settings v1" }, probation: null, outcome: null, created_by: "seed", created_at: at(-70) };
+  const cps: Doc[] = [];
+  const cp = (seq: number, rate: number, done: number, s: number) => {
+    const d = { _id: id(), objective_id: OBJ, seq, state_summary: `${done} accounts done`, next_action: "next_account", bearings_snapshot: bearing(rate, done), agent: "waypoints-harness", created_at: at(s) };
+    cps.push(d);
+    return d;
+  };
+  const fail = (cls: string, s: number, failure: string, context: string, _id = id()) => ({ _id, objective_id: OBJ, class: cls, failure, context, agent: "waypoints-harness", created_at: at(s) });
+  const ins = (coll: string, doc: Doc) => ({ coll, op: "insert", id: doc._id, doc });
+  const tapId = id();
+  const v2 = {
+    _id: id(), version: 2, status: "probation", settings: { ...seed, context_sources: ["account_name", "product_catalog", "account_record_full"] },
+    parent_version: 1, change: { field: "context_sources", from: seed.context_sources, to: ["account_name", "product_catalog", "account_record_full"] },
+    reason: { kind: "tap", id: tapId, summary: "invented-fact ×3: context += account_record_full" },
+    probation: { checkpoints_required: 3, baseline_bearing: 38, watch_class: "invented-fact", started_seq: 8 }, outcome: null, created_by: "surgeon", created_at: at(12),
+  };
+  const snapshot = { objective, harness_config: [v1], checkpoints: [cp(1, 0, 1, -50)], failures: [], decisions: [], resumes: [], policies: [], taps: [], events: [], rubrics: [], at: at(0) };
+  const steps: FxStep[] = [
+    { after: 1, alive: true },
+    { after: 2, change: ins("failures", fail("invented-fact", 2, "QA: invented-fact", 'Body says "$120M in revenue" but revenue_musd is 718.62')) },
+    { after: 3, change: ins("checkpoints", cp(7, 38, 8, 3)) },
+    { after: 5, change: ins("failures", fail("invented-fact", 5, "QA: invented-fact", 'Body says "founded in 1998" but year_established is 1981', "fxinv")) },
+    { after: 11, change: ins("taps", { _id: tapId, objective_id: OBJ, risk: 0.71, components: { similarity: 0.8, recurrence: 1, trend: 0 }, weights: { similarity: 0.4, recurrence: 0.3, trend: 0.3 }, trigger: { kind: "failure", id: "fxinv" }, decision: { tap: true, action: "adjust_settings", decided_by: "deterministic" }, settings_version_after: 2, status: "open", created_at: at(11) }) },
+    { after: 12, change: { coll: "harness_config", op: "update", id: v1._id, doc: { ...v1, status: "superseded" } } },
+    { after: 12.1, change: ins("harness_config", v2) },
+    { after: 16, change: ins("checkpoints", cp(9, 50, 10, 16)) },
+    { after: 19, change: ins("checkpoints", cp(10, 60, 12, 19)) },
+    { after: 22, change: ins("checkpoints", cp(11, 71, 14, 22)) },
+    { after: 23, change: { coll: "harness_config", op: "update", id: v2._id, doc: { ...v2, status: "kept", outcome: { decided_at: at(23), verdict: "kept", why: "invented-fact: 5 in 8 drafts → 0 in 3; pass rate 38% → 71%. Kept." } } } },
+  ];
+  return { snapshot, steps };
+}

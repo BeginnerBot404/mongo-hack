@@ -177,3 +177,7 @@ main.replaying { padding-bottom: 96px; }
 .sarrow { text-align: center; color: #64748b; font-size: 20px; line-height: 22px; font-weight: 900; }
 details.more { margin-top: 12px; }
 details.more > summary { cursor: pointer; color: var(--soft); font-weight: 800; font-size: 16px; padding: 6px 0; }
+.shape { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 8px; font-size: 15px; color: #cbd5e1; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.shape b { color: #f8fafc; }
+.shape .shv { color: #facc15; font-weight: 800; }
+.axis { color: #facc15; }
