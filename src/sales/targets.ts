@@ -2,8 +2,10 @@
 //   empty rubric AUC 0.500 · 1 rule (client=Current) holdout 0.789
 //   best simple additive rubric fit on train (greedy, log-odds points, support ≥ 15): holdout AUC 0.881,
 //   A-grade holdout win rate 0.875 at A≥4 (coverage 36%) · holdout-peeking greedy upper bound 0.905
-// Targets sit ~0.02 below the train-fit ceiling so the harness needs several honest iterations.
-export const T_AUC = 0.86;
+// The agent sees holdout AUC after every proposal, so its effective ceiling is the holdout-peeking one (0.905).
+// A 5-rule hand rubric already scores 0.855 and a low-support overfit one 0.862, so T_AUC sits above both:
+// 0.875 = 0.03 below the reachable ceiling and ~0.02 above what a quick or overfit rubric gets.
+export const T_AUC = 0.875;
 /** A-grade win rate target as a fraction (0..1), matching propose_rubric metrics.*.a_win_rate. */
 export const T_WIN = 0.85;
 /** Same target in percent, for the `a_grade_win_rate` bearing whose unit is "%". */
