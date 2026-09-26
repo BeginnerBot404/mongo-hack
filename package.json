@@ -27,6 +27,7 @@
     "server": "bun run src/server.ts",
     "setup": "bun run scripts/setup-indexes.ts",
     "smoke": "bun run scripts/smoke.ts",
+    "watch": "bun run src/watch.ts",
     "demo:langgraph": "bun run demo/langgraph-agent.ts",
     "demo:reset": "bash demo/reset.sh",
     "demo:clean": "bun run demo/clean.ts && bash demo/reset.sh",
