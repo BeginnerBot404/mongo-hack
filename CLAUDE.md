@@ -38,7 +38,7 @@ Live: 3-minute demo + 2-minute Q&A, hard cut at 5 minutes.
 - `src/clients.ts` exports `mongo`, `db`, `llm` (OpenAI SDK pointed at OpenRouter), `model`, `voyage`. Import from there.
 - `bun run check` smoke-tests MongoDB, OpenRouter, and Voyage credentials.
 - `bun run typecheck` before committing.
-- `bson` is pinned to 7.2.0 via `overrides`: 7.3.x crashes on import under Bun 1.3.1 (`node:v8 isBuildingSnapshot`).
+- Requires bun >= 1.4 (bson 7.3 crashes on import under bun 1.3.x).
 - MongoDB MCP server + skills come from the `mongodb-atlas` Claude plugin.
 
 ## Working rules
