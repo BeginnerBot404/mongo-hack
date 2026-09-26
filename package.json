@@ -46,7 +46,9 @@
     "view:atlas": "bun run src/views/atlas.ts",
     "view:prompt": "bun run src/views/prompt.ts",
     "view:rubric": "bun run src/views/rubric.ts",
-    "view:drafts": "bun run src/views/drafts.ts"
+    "view:drafts": "bun run src/views/drafts.ts",
+    "load:accounts": "bun run scripts/load-accounts.ts",
+    "outreach:smoke": "bun run scripts/outreach-smoke.ts"
   },
   "engines": {
     "bun": ">=1.4"
