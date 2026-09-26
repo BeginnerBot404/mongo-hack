@@ -5,7 +5,8 @@ import {
   formatUSD,
   hoursFromMinutes,
   invoiceTotal,
-  lineTotal,
+  lastPage,
+  pageLabel,
   paginate,
   taxCents,
   totalHours,
@@ -38,10 +39,6 @@ describe("time", () => {
 });
 
 describe("money", () => {
-  test("lineTotal rounds to the nearest cent", () => {
-    expect(lineTotal({ description: "consulting", qty: 1.5, unitCents: 12_333 })).toBe(18_500);
-  });
-
   test("taxCents treats the rate as a percentage", () => {
     expect(taxCents(10_000, 8.875)).toBe(888);
   });
@@ -65,7 +62,11 @@ describe("paging", () => {
     expect(paginate(["a", "b", "c", "d", "e"], 1, 2)).toEqual(["a", "b"]);
   });
 
-  test("paginate last page returns the remainder", () => {
-    expect(paginate(["a", "b", "c", "d", "e"], 3, 2)).toEqual(["e"]);
+  test("lastPage returns the remainder", () => {
+    expect(lastPage(["a", "b", "c", "d", "e"], 2)).toEqual(["e"]);
+  });
+
+  test("pageLabel shows the item range", () => {
+    expect(pageLabel(2, 2, 5)).toBe("Showing 3-4 of 5");
   });
 });

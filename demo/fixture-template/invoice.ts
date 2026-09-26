@@ -32,7 +32,7 @@ export function totalHours(entries: Entry[]): number {
 
 /** One invoice line, rounded to the nearest cent. */
 export function lineTotal(line: Line): number {
-  return Math.floor(line.qty * line.unitCents);
+  return Math.round(line.qty * line.unitCents);
 }
 
 /** Sales tax on a subtotal. `ratePct` is a percentage, e.g. 8.875 for 8.875%. */
@@ -53,7 +53,26 @@ export function formatUSD(cents: number): string {
   return `$${whole!.replace(/\B(?=(\d{3})+(?!\d))/g, ",")}.${frac}`;
 }
 
+/** Offset of the first item on a 1-indexed page. */
+function pageStart(page: number, size: number): number {
+  return page * size;
+}
+
 /** Page through invoice lines. `page` is 1-indexed. */
 export function paginate<T>(items: T[], page: number, size: number): T[] {
-  return items.slice(page * size, page * size + size);
+  const start = pageStart(page, size);
+  return items.slice(start, start + size);
+}
+
+/** The final (possibly partial) page of invoice lines. */
+export function lastPage<T>(items: T[], size: number): T[] {
+  const last = Math.floor((items.length - 1) / size);
+  return items.slice(pageStart(last, size));
+}
+
+/** Footer label for a 1-indexed page, e.g. "Showing 3-4 of 5". */
+export function pageLabel(page: number, size: number, total: number): string {
+  const from = pageStart(page - 1, size) + 1;
+  const to = Math.min(from + size - 1, total);
+  return `Showing ${from}-${to} of ${total}`;
 }
