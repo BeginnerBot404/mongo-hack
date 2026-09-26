@@ -91,7 +91,7 @@ export async function recall(input: {
       query: input.query,
       documents: candidates.map((c) => String(c.text ?? "")),
       model: RERANK_MODEL,
-      topK: input.limit,
+      topK: Math.min(input.limit, candidates.length),
     });
     const results = (reranked.data ?? []).map((r) => ({
       ...candidates[r.index ?? 0],
