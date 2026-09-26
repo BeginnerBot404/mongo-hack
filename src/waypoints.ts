@@ -285,7 +285,9 @@ export async function checkpoint(input: {
   const previous = await col("checkpoints").findOne({ objective_id: objectiveId, seq: { $lt: seq } }, { sort: { seq: -1 } });
   const before = bearingValue(previous, bearingName);
   const after = bearingValue(checkpointDoc, bearingName);
-  if (before !== null && after !== null && after < before) {
+  // Tolerance matches the sentinel: integer bearings (tests) regress on any drop, fractional ones (AUC) on >= 0.005.
+  const tolerance = Number.isInteger(before) && Number.isInteger(after) ? 0 : 0.005;
+  if (before !== null && after !== null && before - after > tolerance - 1e-9) {
     const logged = await logFailure({
       objective_id: input.objective_id,
       failure: `Regression: "${bearingName}" dropped from ${before} to ${after} at checkpoint ${seq}. A change broke something that was working.`,
