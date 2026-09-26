@@ -1,58 +1,89 @@
 #!/usr/bin/env bash
-# Waypoints demo layout in herdr (https://herdr.dev).
+# Waypoints "glass box" demo layout in herdr (https://herdr.dev).
 #
-#   ┌──────────────────────┬──────────────────────┐
-#   │ hermes               │                      │
-#   │ (bun run demo:hermes │  watch               │
-#   │  pre-typed, no Enter)│  (bun run watch,     │
-#   ├──────────────────────┤   running)           │
-#   │ langgraph            │                      │
-#   │ (demo:langgraph      │                      │
-#   │  pre-typed)          │                      │
-#   └──────────────────────┴──────────────────────┘
+#   ┌────────────────────────────┬──────────────────────────┐
+#   │                            │ view:prompt  (system     │
+#   │  harness                   │   prompt + settings diff)│
+#   │  (command pre-typed,       ├──────────────────────────┤
+#   │   NOT executed)            │ view:rubric  (rubric +   │
+#   │                            │   holdout metrics diff)  │
+#   │                            ├──────────────────────────┤
+#   │                            │ view:atlas   (raw change │
+#   │                            │   stream, all colls)     │
+#   └────────────────────────────┴──────────────────────────┘
+#   + tab "sentinel" (not focused): bun run sentinel, running.
 #
-# Agents are NOT started: their commands are typed into the shell without Enter,
-# so the presenter controls timing. Only the watch pane runs immediately.
-#
+# Re-running stops the previous herdr session first, so it doubles as the reset.
 # Usage: bun run demo:layout            (session "waypoints"; attaches when done)
-#        WAYPOINTS_HERDR_SESSION=x NO_ATTACH=1 bash layout/herdr.sh
+#        WAYPOINTS_HERDR_SESSION=x NO_ATTACH=1 VIEW_DB=waypoints_smoke bash layout/herdr.sh
 set -euo pipefail
 
 SESSION="${WAYPOINTS_HERDR_SESSION:-waypoints}"
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-HERMES_CMD="${HERMES_CMD:-bun run demo:hermes}"
-LANGGRAPH_CMD="${LANGGRAPH_CMD:-bun run demo:langgraph}"
-WATCH_CMD="${WATCH_CMD:-bun run watch}"
+DBARG="${VIEW_DB:+ --db $VIEW_DB}"
+HARNESS_CMD="${HARNESS_CMD:-bun run harness --fresh --die-after-checkpoint 3}"
+PROMPT_CMD="${PROMPT_CMD:-bun run view:prompt$DBARG}"
+RUBRIC_CMD="${RUBRIC_CMD:-bun run view:rubric$DBARG}"
+ATLAS_CMD="${ATLAS_CMD:-bun run view:atlas$DBARG}"
+SENTINEL_CMD="${SENTINEL_CMD:-bun run sentinel}"
 
 command -v herdr >/dev/null || { echo "herdr not installed: brew install herdr (or use: bun run demo:layout:tmux)"; exit 1; }
 command -v jq >/dev/null || { echo "jq not installed: brew install jq"; exit 1; }
 
 h() { herdr --session "$SESSION" "$@"; }
+running() { herdr session list 2>/dev/null | awk -v s="$SESSION" '$1==s && $2=="running"{f=1} END{exit !f}'; }
 
-# Start the session's server headless if it isn't running yet.
-if ! herdr session list 2>/dev/null | awk -v s="$SESSION" '$1==s && $2=="running"{f=1} END{exit !f}'; then
-  nohup herdr --session "$SESSION" server >/dev/null 2>&1 &
-  for _ in $(seq 1 50); do
-    h workspace list >/dev/null 2>&1 && break
-    sleep 0.1
-  done
+# Reset: stop the previous session (kills its views, sentinel and any harness still running).
+if running; then
+  echo "stopping previous herdr session '$SESSION'…"
+  herdr session stop "$SESSION" >/dev/null 2>&1 || true
+  for _ in $(seq 1 50); do running || break; sleep 0.1; done
 fi
+# Drop persisted workspaces so the restart doesn't restore the old layout next to the new one.
+herdr session delete "$SESSION" >/dev/null 2>&1 || true
 
-ws=$(h workspace create --cwd "$ROOT_DIR" --label waypoints-demo --focus)
-hermes=$(jq -r .result.root_pane.pane_id <<<"$ws")
-watch=$(h pane split "$hermes" --direction right --ratio 0.45 --cwd "$ROOT_DIR" | jq -r .result.pane.pane_id)
-langgraph=$(h pane split "$hermes" --direction down --cwd "$ROOT_DIR" | jq -r .result.pane.pane_id)
+nohup herdr --session "$SESSION" server >/dev/null 2>&1 &
+for _ in $(seq 1 50); do
+  h workspace list >/dev/null 2>&1 && break
+  sleep 0.1
+done
 
-h pane rename "$hermes" hermes >/dev/null
-h pane rename "$langgraph" langgraph >/dev/null
-h pane rename "$watch" "watch (Atlas change stream)" >/dev/null
+# Belt and braces: close any workspace that survived.
+for old in $(h workspace list 2>/dev/null | jq -r '.result.workspaces[].workspace_id' 2>/dev/null); do
+  h workspace close "$old" >/dev/null 2>&1 || true
+done
+
+ws=$(h workspace create --cwd "$ROOT_DIR" --label waypoints --focus)
+wsid=$(jq -r '.result.workspace.workspace_id // .result.workspace_id // empty' <<<"$ws")
+harness=$(jq -r .result.root_pane.pane_id <<<"$ws")
+prompt=$(h pane split "$harness" --direction right --ratio 0.5 --cwd "$ROOT_DIR" | jq -r .result.pane.pane_id)
+rubric=$(h pane split "$prompt" --direction down --ratio 0.4 --cwd "$ROOT_DIR" | jq -r .result.pane.pane_id)
+atlas=$(h pane split "$rubric" --direction down --ratio 0.55 --cwd "$ROOT_DIR" | jq -r .result.pane.pane_id)
+
+h pane rename "$harness" "harness" >/dev/null
+h pane rename "$prompt" "system prompt (harness_config)" >/dev/null
+h pane rename "$rubric" "rubric (rubrics)" >/dev/null
+h pane rename "$atlas" "Atlas change stream" >/dev/null
+
+# Sentinel: its own unfocused tab, running in the background.
+sentinel=""
+tab=$(h tab create ${wsid:+--workspace "$wsid"} --cwd "$ROOT_DIR" --label sentinel --no-focus 2>/dev/null || true)
+sentinel=$(jq -r '.result.root_pane.pane_id // .result.pane.pane_id // empty' <<<"$tab" 2>/dev/null || true)
 
 sleep 0.8 # let the shells reach their prompts
-h pane send-text "$hermes" "$HERMES_CMD" >/dev/null
-h pane send-text "$langgraph" "$LANGGRAPH_CMD" >/dev/null
-h pane run "$watch" "$WATCH_CMD" >/dev/null
+h pane send-text "$harness" "$HARNESS_CMD" >/dev/null
+h pane run "$prompt" "$PROMPT_CMD" >/dev/null
+h pane run "$rubric" "$RUBRIC_CMD" >/dev/null
+h pane run "$atlas" "$ATLAS_CMD" >/dev/null
+if [[ -n "$sentinel" ]]; then
+  h pane rename "$sentinel" sentinel >/dev/null || true
+  h pane run "$sentinel" "$SENTINEL_CMD" >/dev/null
+else
+  echo "WARN: could not create sentinel tab; run '$SENTINEL_CMD' yourself"
+fi
+h pane focus "$harness" >/dev/null 2>&1 || true
 
-echo "herdr session '$SESSION': hermes=$hermes langgraph=$langgraph watch=$watch"
+echo "herdr session '$SESSION': harness=$harness prompt=$prompt rubric=$rubric atlas=$atlas sentinel=${sentinel:-none}"
 if [[ -z "${NO_ATTACH:-}" ]]; then
   exec herdr --session "$SESSION"
 fi

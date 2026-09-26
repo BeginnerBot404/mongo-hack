@@ -1,27 +1,35 @@
 #!/usr/bin/env bash
-# Fallback for layout/herdr.sh: same 3-pane layout in tmux.
-# Left-top hermes (pre-typed), left-bottom langgraph (pre-typed), right watch (running).
+# Fallback for layout/herdr.sh: same glass-box layout in tmux.
+# Left: harness (pre-typed). Right column: view:prompt / view:rubric / view:atlas (running).
+# Window 2 "sentinel": bun run sentinel (running, not focused). Re-running kills the previous session first.
 set -euo pipefail
 
 SESSION="${WAYPOINTS_TMUX_SESSION:-waypoints}"
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+DBARG="${VIEW_DB:+ --db $VIEW_DB}"
 
 command -v tmux >/dev/null || { echo "tmux not installed: brew install tmux"; exit 1; }
 tmux kill-session -t "$SESSION" 2>/dev/null || true
 
-tmux new-session -d -s "$SESSION" -c "$ROOT_DIR" -x "$(tput cols)" -y "$(tput lines)"
+tmux new-session -d -s "$SESSION" -n demo -c "$ROOT_DIR" -x "$(tput cols)" -y "$(tput lines)"
 tmux set -t "$SESSION" pane-border-status top
-hermes=$(tmux display -p -t "$SESSION" '#{pane_id}')
-watch=$(tmux split-window -h -p 55 -t "$hermes" -c "$ROOT_DIR" -P -F '#{pane_id}')
-langgraph=$(tmux split-window -v -t "$hermes" -c "$ROOT_DIR" -P -F '#{pane_id}')
-tmux select-pane -t "$hermes" -T hermes
-tmux select-pane -t "$langgraph" -T langgraph
-tmux select-pane -t "$watch" -T "watch (Atlas change stream)"
+harness=$(tmux display -p -t "$SESSION" '#{pane_id}')
+prompt=$(tmux split-window -h -p 50 -t "$harness" -c "$ROOT_DIR" -P -F '#{pane_id}')
+rubric=$(tmux split-window -v -p 60 -t "$prompt" -c "$ROOT_DIR" -P -F '#{pane_id}')
+atlas=$(tmux split-window -v -p 45 -t "$rubric" -c "$ROOT_DIR" -P -F '#{pane_id}')
+tmux select-pane -t "$harness" -T harness
+tmux select-pane -t "$prompt" -T "system prompt (harness_config)"
+tmux select-pane -t "$rubric" -T "rubric (rubrics)"
+tmux select-pane -t "$atlas" -T "Atlas change stream"
+sentinel=$(tmux new-window -d -t "$SESSION" -n sentinel -c "$ROOT_DIR" -P -F '#{pane_id}')
 
 sleep 0.5
-tmux send-keys -t "$hermes" "${HERMES_CMD:-bun run demo:hermes}"
-tmux send-keys -t "$langgraph" "${LANGGRAPH_CMD:-bun run demo:langgraph}"
-tmux send-keys -t "$watch" "${WATCH_CMD:-bun run watch}" Enter
-tmux select-pane -t "$hermes"
+tmux send-keys -t "$harness" "${HARNESS_CMD:-bun run harness --fresh --die-after-checkpoint 3}"
+tmux send-keys -t "$prompt" "${PROMPT_CMD:-bun run view:prompt$DBARG}" Enter
+tmux send-keys -t "$rubric" "${RUBRIC_CMD:-bun run view:rubric$DBARG}" Enter
+tmux send-keys -t "$atlas" "${ATLAS_CMD:-bun run view:atlas$DBARG}" Enter
+tmux send-keys -t "$sentinel" "${SENTINEL_CMD:-bun run sentinel}" Enter
+tmux select-window -t "$SESSION:demo"
+tmux select-pane -t "$harness"
 
 [[ -n "${NO_ATTACH:-}" ]] || exec tmux attach -t "$SESSION"
