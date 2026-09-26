@@ -1,5 +1,18 @@
 # Waypoints harness demo
 
+Default task (`--task outreach`, docs/OUTREACH-PACK.md): an SDR agent works an outbound queue (QUEUE_SIZE accounts,
+default 24), one first-touch email per account, graded by a deterministic QA gate. The harness rebuilds itself from
+harness_config before every account: prompt fragments, context_sources (what the model sees about the account),
+granted_tools (what it can call), required_tools (`precheck_email` enforced: submit refused + `skipped-precheck` logged)
+and reasoning (vLLM `chat_template_kwargs.enable_thinking`). After every submit the harness logs each QA failure class
+and checkpoints (bearings from getQueueStats); one retry per account. `--workers N` (default 3) runs N account loops in
+one process sharing one settings object; checkpoints/log_failure/reloads go through one mutex.
+Run: `bun run demo:clean --hard` → `bun run sentinel` (background) → `DEMO_PROVIDER=gb10 QUEUE_SIZE=24 bun run harness --fresh`.
+Terminal: `w2 ✉ #7 Cancity ✔ pass` / `✘ invented-fact (…)`, `pass rate 40% (10)`, `⟳ HARNESS REBUILT v3 → v4 (trial): context += account_record_full [invented-fact ×3]`,
+`▲ TAP …`, `✔ KEPT` / `↩ UNDONE` with the verdict text. With DEMO_PROVIDER=gb10 there is no OpenRouter fallback (one GB10 retry).
+
+## Sales task (`--task sales`)
+
 Default task (`--task sales`, docs/SALES-PACK.md): improve a B2B deal-qualification rubric. A deterministic scorer in Atlas
 grades every proposal on held-out real Won/Lost deals the agent never sees. Bearings `holdout_auc` and `a_grade_win_rate`;
 end state `holdout_auc ≥ T_AUC` (src/sales/targets.ts), immutable. History carries over: a fresh run starts from the best

@@ -52,8 +52,8 @@ function buildModel(reasoning: "on" | "off", tools: StructuredToolInterface[]) {
     apiKey: gb10 ? process.env.GB10_API_KEY || "none" : process.env.OPENROUTER_API_KEY,
     configuration: { baseURL: gb10 ? process.env.GB10_BASE_URL || "http://localhost:8000/v1" : "https://openrouter.ai/api/v1" },
     maxRetries: 1,
-    timeout: think ? 150_000 : 90_000,
-    maxTokens: think ? 4000 : 1800,
+    timeout: think ? 240_000 : 150_000,
+    maxTokens: think ? 4000 : 1500,
     temperature: 0.7,
     // vLLM chat-template switch (GLM): reasoning "on" = enable_thinking. modelKwargs is spread into the request body.
     ...(gb10 ? { modelKwargs: { chat_template_kwargs: { enable_thinking: think } } } : {}),
@@ -151,7 +151,7 @@ export async function runOutreach(o: OutreachOpts): Promise<void> {
       `You are an SDR at Northwind Forge, a (fictional) hardware vendor. You write first-touch cold emails to B2B accounts.\n` +
       (s.context.includes("product_catalog") ? `\nProducts and list prices:\n${catalog}\n` : "") +
       `\nStyle: short, friendly, specific to the account. One email per account: a subject line and a plain-text body, signed "Alex, Northwind Forge".\n` +
-      `Work through tools only (${tools.join(", ")}). Do not explain; call the tools. Finish every account with submit_email.\n` +
+      `Work through tools only (${tools.join(", ")}). Do not explain or plan in text: your reply is a tool call. Finish every account with submit_email.\n` +
       (s.required.includes("precheck_email") ? `submit_email is refused unless precheck_email passed on that exact subject and body first.\n` : "") +
       `\n## Harness settings v${s.version} (${s.status}): standing rules\n${rules || "- (none)"}`
     );
@@ -186,7 +186,7 @@ export async function runOutreach(o: OutreachOpts): Promise<void> {
             `account ${d.account}; settings v${shape!.version}; required_tools includes precheck_email`));
           return JSON.stringify({ refused: true, error: "Refused by the harness: call precheck_email on this exact subject and body first, fix any failures, then submit_email the same text." });
         }
-        const r: any = await T.submit_email({ objective_id: objectiveId!, ...d, agent: `${AGENT}/${w.tag}`, settings_version: shape!.version });
+        const r: any = await T.submit_email({ objective_id: objectiveId!, ...d, agent: AGENT, worker: w.tag, settings_version: shape!.version } as any);
         if (r.refused) return JSON.stringify({ refused: true, error: r.why });
         w.lastSubmit = { ...r, subject: d.subject, body: d.body };
         return JSON.stringify({ pass: r.pass, failures: r.failures });
@@ -222,9 +222,10 @@ export async function runOutreach(o: OutreachOpts): Promise<void> {
   // ---------- verdicts + rebuilds ----------
   const seenOutcomes = new Set<number>();
   for (const d of await configs().find({ outcome: { $ne: null } }, { projection: { version: 1 } }).toArray()) seenOutcomes.add(d.version);
-  const AXIS: Record<string, string> = { prompt_fragments: "rules", context_sources: "context", granted_tools: "tools", required_tools: "required", reasoning: "reasoning", sentinel_threshold: "threshold", model: "model" };
+  const AXIS: Record<string, string> = { guardrail: "tools", prompt_fragments: "rules", context_sources: "context", granted_tools: "tools", required_tools: "required", reasoning: "reasoning", sentinel_threshold: "threshold", model: "model" };
   function describeChange(ch: any): string {
     if (!ch) return "no change";
+    if (ch.also) return `${describeChange({ ...ch, also: undefined, field: ch.field === "guardrail" ? "granted_tools" : ch.field })}  ${describeChange(ch.also)}`;
     const axis = AXIS[ch.field] ?? ch.field;
     if (Array.isArray(ch.from) && Array.isArray(ch.to)) {
       const add = ch.to.filter((x: string) => !ch.from.includes(x)), rem = ch.from.filter((x: string) => !ch.to.includes(x));
@@ -332,7 +333,7 @@ export async function runOutreach(o: OutreachOpts): Promise<void> {
       const secs = (Date.now() - ts) / 1000;
       msgs.push(msg);
       const calls = msg.tool_calls ?? [];
-      log(dim(`    ${w.tag} ◆ ${secs.toFixed(1)}s · v${shape!.version}${calls.length ? ` → ${calls.map((c) => c.name).join(", ")}` : " (no tool call)"}`));
+      log(dim(`    ${w.tag} ◆ ${secs.toFixed(1)}s · ${msg.usage_metadata?.output_tokens ?? "?"} tok · v${shape!.version}${calls.length ? ` → ${calls.map((c) => c.name).join(", ")}` : " (no tool call)"}`));
       if (!calls.length) {
         msgs.push(new HumanMessage("Call a tool now. The email must be sent with submit_email (subject, body)."));
         continue;
