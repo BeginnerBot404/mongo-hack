@@ -13,6 +13,30 @@ const pct = (n: number, d: number) => (d ? `${Math.round((n / d) * 100)}%` : "�
 const FIELD_AXIS: Record<string, string> = { prompt_fragments: "rules", context_sources: "context policy", reasoning: "reasoning mode", required_tools: "guardrail", granted_tools: "tool access", model: "model", sentinel_threshold: "sentinel" };
 const FIELD_NAME: Record<string, string> = { prompt_fragments: "rule", context_sources: "context", granted_tools: "tool", required_tools: "required tool", reasoning: "reasoning", model: "model", sentinel_threshold: "sentinel threshold" };
 
+const LOOP = [
+  ["work", "WORK"],
+  ["grade", "GRADE"],
+  ["detect", "DETECT"],
+  ["adapt", "ADAPT (trial)"],
+  ["verdict", "VERDICT"],
+  ["raise", "RAISE THE BAR"],
+] as const;
+const CHECK_WORDS: Record<string, string> = { "no-sector-fit": "sector-fit", "generic-opener": "no generic opener", "subject-not-personal": "personal subject", "no-specific-number": "specific number", "weak-cta": "strong CTA" };
+
+/** Best-effort current stage from the newest writes; null when nothing recent (the diagram stays static). */
+function stageNow(cfgs: Document[], latest: Document | null, lastBarEv: Document | null, lastDraft: Document | null, lastFail: Document | null): string | null {
+  const now = Date.now();
+  const recent = (d: unknown, s: number) => d && now - ms(d) < s * 1000;
+  if (lastBarEv && recent(lastBarEv.created_at, 90)) return "raise";
+  const decided = [...cfgs].reverse().find((c) => c.outcome?.decided_at);
+  if (decided && recent(decided.outcome.decided_at, 60)) return "verdict";
+  if (cfgs.some((c) => c.status === "probation")) return "adapt";
+  if (lastFail && recent(lastFail.created_at, 20)) return "detect";
+  if (latest && latest.status !== "completed" && lastDraft && recent(lastDraft.created_at, 20)) return "grade";
+  if (latest && latest.status !== "completed" && recent(latest.updated_at ?? latest.created_at, 600)) return "work";
+  return null;
+}
+
 type Line = { sign: "+" | "−" | "~"; label: string; text: string };
 function diff(a: Document, b: Document): { lines: Line[]; fields: string[] } {
   const lines: Line[] = [];
@@ -34,13 +58,19 @@ export default async function Playbook({ searchParams }: { searchParams: Promise
   const sp = await searchParams;
   const db = waypointsDb(sp.db);
   const q = sp.db ? `db=${encodeURIComponent(sp.db)}` : "";
-  const [cfgs, taps, failures, drafts, latest] = await Promise.all([
+  const [cfgs, taps, failures, drafts, latest, bars, barEvs, objs] = await Promise.all([
     db.collection("harness_config").find({}, { projection: { embedding: 0 } }).sort({ version: 1 }).toArray(),
     db.collection("taps").find({}, { projection: { embedding: 0 } }).toArray(),
     db.collection("failures").find({}, { projection: { class: 1, objective_id: 1, created_at: 1 } }).toArray(),
-    db.collection("drafts").find({}, { projection: { settings_version: 1, attempt: 1, qa: 1, objective_id: 1 } }).toArray(),
+    db.collection("drafts").find({}, { projection: { settings_version: 1, attempt: 1, qa: 1, objective_id: 1, created_at: 1 } }).toArray(),
     db.collection("objectives").findOne({}, { sort: { created_at: -1 } }),
+    db.collection("bars").find({}).sort({ version: 1 }).toArray(),
+    db.collection("events").find({ kind: { $in: ["bar_raised", "bar_held"] } }).sort({ created_at: -1 }).limit(1).toArray(),
+    db.collection("objectives").find({}, { projection: { batch: 1, level: 1, target: 1, bar_version: 1, created_at: 1 } }).toArray(),
   ]);
+  const byTime = (xs: Document[]) => xs.reduce<Document | null>((a, x) => (!a || ms(x.created_at) > ms(a.created_at) ? x : a), null);
+  const stage = stageNow(cfgs, latest, barEvs[0] ?? null, byTime(drafts as Document[]), byTime(failures));
+  const heldBy = (b: Document) => objs.filter((o) => o.bar_version === b.version).map((o) => o.batch).filter((x) => x != null).sort((a, b) => a - b);
   const cur = [...cfgs].reverse().find((c) => ["active", "probation", "kept"].includes(c.status));
   const st: Document = cur?.settings ?? {};
   const end = latest?.end_state as Document | undefined;
@@ -66,6 +96,17 @@ export default async function Playbook({ searchParams }: { searchParams: Promise
   });
   return (
     <main className="console playbook">
+      <nav className="loop" aria-label="the loop">
+        {LOOP.map(([k, label], i) => (
+          <span key={k} className="loopstep">
+            <span className={`loopnode ${stage === k ? "cur" : ""} ${k === "raise" ? "raise" : ""}`}>
+              <i>{i + 1}</i> {label}
+            </span>
+            <span className="looparrow">{i < LOOP.length - 1 ? "→" : "↺"}</span>
+          </span>
+        ))}
+        <span className="loopnote">{stage ? "highlighted: where the loop is now" : "two ladders: playbook = how it works · bar = what counts as good"}</span>
+      </nav>
       <section className="pbtop">
         <div className="goalcard">
           <div className="gk">🔒 Locked goal · never changes</div>
@@ -82,6 +123,40 @@ export default async function Playbook({ searchParams }: { searchParams: Promise
           </div>
         </div>
       </section>
+      <h2 className="pbh">The bar <span className="psub">— what counts as good · {bars.length || 1} version{bars.length === 1 ? "" : "s"} · rises only when a batch earns it</span></h2>
+      <div className="barrail">
+        {bars.length === 0 && <article className="barcard active"><header><span className="pbv">bar v1</span><span className="pbchip">seed (not yet written)</span></header><div className="barfacts">level 1 · 80% · the original 7 checks</div></article>}
+        {bars.map((b) => {
+          const eb = b.earned_by as Document | null;
+          const newc = arr(b.new_checks).map((c) => CHECK_WORDS[c] ?? c);
+          if (b.level >= 3 && arr(b.new_checks).includes("no-sector-fit")) newc.push("90 words");
+          const held = heldBy(b);
+          return (
+            <article key={String(b._id)} className={`barcard ${b.status}`}>
+              <header>
+                <span className="pbv">bar v{b.version}</span>
+                <span className={`pbchip ${b.status === "active" ? "kept" : "seed"}`}>{b.status}</span>
+              </header>
+              <div className="barbig">
+                <span><em>level</em> <b>{b.level}</b></span>
+                <span><em>target</em> <b>{b.target_pct}%</b></span>
+              </div>
+              <div className="barfacts">
+                <div><em>new checks</em> {b.version === 1 && !newc.length ? "the original 7" : newc.length ? newc.join(", ") : "none (target only)"}</div>
+                <div>
+                  <em>earned by</em>{" "}
+                  {eb ? (
+                    <a href={`/runs/${String(eb.objective_id)}${q ? `?${q}` : ""}`}>batch {String(eb.batch)} ({String(eb.first_try_pct)}% first-try)</a>
+                  ) : (
+                    "seed"
+                  )}
+                </div>
+                {held.length > 0 && <div><em>worked by</em> batch {held.join(", ")}</div>}
+              </div>
+            </article>
+          );
+        })}
+      </div>
       <h2 className="pbh">How the harness rebuilt itself <span className="psub">— {cfgs.length} versions · change the route, never the destination</span></h2>
       <div className="pbcards">
         {cards.map((k) => (

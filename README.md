@@ -60,6 +60,19 @@ flowchart LR
 - **Recall:** Voyage `voyage-4` embeddings, Atlas `$vectorSearch`, Voyage `rerank-2.5`.
 - **Model:** `z-ai/glm-5.3-flash` on OpenRouter. `DEMO_PROVIDER=gb10` uses a local vLLM (GB10) serving GLM, with OpenRouter as fallback.
 
+## The loop
+
+**WORK → GRADE → DETECT → ADAPT (trial) → VERDICT → RAISE THE BAR**, then round again.
+
+1. **Work** — the agent writes against the current playbook.
+2. **Grade** — a deterministic QA gate scores every draft at the batch's bar level.
+3. **Detect** — the sentinel spots recurring failure classes or a stall below the batch's target.
+4. **Adapt (trial)** — it rewrites one thing in the playbook (rules, context, tools, guardrail, reasoning) on probation.
+5. **Verdict** — the change is kept if it helped, rolled back automatically if not.
+6. **Raise the bar** — when a batch closes, the bar rises only if that batch earned it (every account done, first-try ≥ target); otherwise it holds.
+
+Two ladders, both versioned in Atlas: the **playbook** (`harness_config`) is *how it works*; the **bar** (`bars`) is *what counts as good* (level 1–4 checks + target %). The playbook changes to meet the bar; the bar only rises when earned.
+
 ## The loop in plain English
 
 | We say | In the code |

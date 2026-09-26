@@ -22,9 +22,10 @@ function axisOf(c: Document): string {
 export default async function Runs({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
   const sp = await searchParams;
   const db = waypointsDb(sp.db);
-  const [objectives, cfgs] = await Promise.all([
+  const [objectives, cfgs, bars] = await Promise.all([
     db.collection("objectives").find({}, { projection: { embedding: 0 } }).sort({ created_at: -1 }).limit(40).toArray(),
     db.collection("harness_config").find({}, { projection: { embedding: 0 } }).sort({ version: 1 }).toArray(),
+    db.collection("bars").find({}).sort({ version: 1 }).toArray(),
   ]);
   const ids = objectives.map((o) => o._id);
   const drafts = await db
@@ -47,7 +48,10 @@ export default async function Runs({ searchParams }: { searchParams: Promise<Rec
     const versions = cfgs.filter((c) => c.change && ms(c.created_at) >= start && ms(c.created_at) < endBound && c.created_by !== "seed");
     const accTarget = ((o.bearings ?? []) as Document[]).find((b) => b.name === "accounts_done")?.target;
     const vAt = (at: number) => [...cfgs].filter((c) => ms(c.created_at) <= at + 1000).sort((a, b) => b.version - a.version)[0]?.version ?? null;
-    return { o, start, last, ft, early, late, done, accTarget, versions, n: mine.length, v0: vAt(start), v1: vAt(last) };
+    const bar = typeof o.bar_version === "number" ? bars.find((b) => b.version === o.bar_version) : null;
+    const level: number | null = typeof o.level === "number" ? o.level : bar?.level ?? null;
+    const target: number | null = typeof o.target === "number" ? o.target : bar?.target_pct ?? (typeof o.end_state?.target === "number" ? o.end_state.target : null);
+    return { o, level, target, start, last, ft, early, late, done, accTarget, versions, n: mine.length, v0: vAt(start), v1: vAt(last) };
   });
   return (
     <main className="console runs">
@@ -62,6 +66,8 @@ export default async function Runs({ searchParams }: { searchParams: Promise<Rec
             <th>Started</th>
             <th>Duration</th>
             <th>Accounts</th>
+            <th>Bar level</th>
+            <th>Target</th>
             <th>First-try pass</th>
             <th>Playbook</th>
             <th>Harness changes</th>
@@ -84,6 +90,8 @@ export default async function Runs({ searchParams }: { searchParams: Promise<Rec
                 {r.done}
                 {r.accTarget ? <span className="of">/{r.accTarget}</span> : null}
               </td>
+              <td className="rate">{r.level != null ? <b>L{r.level}</b> : <span className="rsub">—</span>}{r.o.bar_version != null ? <div className="rsub">bar v{String(r.o.bar_version)}</div> : null}</td>
+              <td className="rate">{r.target != null ? `${r.target}%` : "—"}</td>
               <td className="rate">
                 {r.ft.length ? (
                   <>

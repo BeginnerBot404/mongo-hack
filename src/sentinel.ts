@@ -63,8 +63,13 @@ export const OUTREACH_QA_CLASSES = [
   "no-specific-number",
   "weak-cta",
 ] as const;
-/** Outreach stall: qa_pass_rate within ±STALL_POINTS for STALL_CHECKPOINTS checkpoints (and below the 80% goal). */
+/** Outreach stall: qa_pass_rate within ±STALL_POINTS for STALL_CHECKPOINTS checkpoints (and below the objective's target). */
 export const STALL_POINTS = 2;
+/** The objective's current target (the bar it works under): objective.target → end_state.target → 80. */
+export function stallTarget(objective: Document | null | undefined): number {
+  const t = typeof objective?.target === "number" ? objective.target : objective?.end_state?.target;
+  return typeof t === "number" && Number.isFinite(t) ? t : 80;
+}
 export const STALL_CHECKPOINTS = 4;
 
 export function reasoningOn(s: HarnessSettings): PlannedChange | null {
@@ -435,7 +440,9 @@ export class Sentinel {
     if (values.length < STALL_CHECKPOINTS || values.some((v) => v === null)) return;
     const vs = values as number[];
     const flat = Math.max(...vs) - Math.min(...vs) <= 2 * STALL_POINTS && vs.every((v) => Math.abs(v - vs[0]!) <= STALL_POINTS);
-    if (!flat || vs[0]! >= 80) return;
+    if (!flat) return;
+    const objective = await db.collection("objectives").findOne({ _id: cp.objective_id }, { projection: { target: 1, end_state: 1 } });
+    if (vs[0]! >= stallTarget(objective)) return;
     const config = await currentConfig();
     if (config.settings.reasoning === "on") return;
     const tapId = new ObjectId();

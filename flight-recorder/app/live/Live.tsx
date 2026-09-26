@@ -8,7 +8,7 @@ import {
 } from "../Recorder";
 import { fragment } from "@/lib/fragments";
 
-type LiveState = State & { drafts: Doc[]; accounts: Doc[]; objectives: Doc[]; inflight: Doc[] };
+type LiveState = State & { drafts: Doc[]; accounts: Doc[]; objectives: Doc[]; inflight: Doc[]; bars: Doc[] };
 type Raw = { k: number; at: number; coll: string; op: string; text: string };
 
 const ALL_CONTEXT = ["account_name", "account_summary", "account_record_full", "product_catalog"];
@@ -43,7 +43,7 @@ function trimRaw(v: unknown, key = ""): unknown {
 const compact = (v: unknown) => JSON.stringify(v).replace(/"([A-Za-z_][\w.]*)":/g, "$1:").replace(/,(?=[A-Za-z_"{[])/g, ", ");
 
 function useLive(objective: string | null, ready: boolean, series = true) {
-  const [s, setS] = useState<LiveState>({ ...EMPTY, drafts: [], accounts: [], objectives: [], inflight: [] });
+  const [s, setS] = useState<LiveState>({ ...EMPTY, drafts: [], accounts: [], objectives: [], inflight: [], bars: [] });
   const [raw, setRaw] = useState<Raw[]>([]);
   const [status, setStatus] = useState<"connecting" | "live" | "error">("connecting");
   const [loaded, setLoaded] = useState(false);
@@ -54,7 +54,7 @@ function useLive(objective: string | null, ready: boolean, series = true) {
     es.addEventListener("snapshot", (e) => {
       const d = JSON.parse((e as MessageEvent).data);
       // never clear on a new batch: the series snapshot carries every batch since the run started
-      setS({ ...EMPTY, drafts: [], accounts: [], objectives: d.objective ? [d.objective] : [], inflight: [], ...d });
+      setS({ ...EMPTY, drafts: [], accounts: [], objectives: d.objective ? [d.objective] : [], inflight: [], bars: [], ...d });
       setStatus("live");
       setLoaded(true);
     });
@@ -81,6 +81,9 @@ function useLive(objective: string | null, ready: boolean, series = true) {
           if (prev.objective?._id === ch.doc._id) next.objective = ch.doc;
         } else if (ch.coll === "harness_config") {
           return reduce(prev, ch) as LiveState;
+        } else if (ch.coll === "bars") {
+          if (ch.op === "delete") next.bars = prev.bars.filter((d) => d._id !== ch.id);
+          else if (ch.doc) next.bars = upsert(prev.bars ?? [], ch.doc, "version");
         } else if (ch.coll !== "accounts" && Array.isArray(prev[key])) {
           const list = prev[key] as Doc[];
           if (ch.op === "delete") (next as Doc)[key] = list.filter((d) => d._id !== ch.id);
@@ -337,6 +340,27 @@ const QA_ORDER: [string, string][] = [
   ["too-long", "length"],
   ["missing-cta", "CTA"],
 ];
+// the rising bar (mirror of src/outreach/qa.ts LEVEL_NEW_CHECKS): levels are cumulative, level 1 = the original 7
+export const LEVEL_NEW: Record<number, [string, string][]> = {
+  1: QA_ORDER,
+  2: [["generic-opener", "opener"], ["subject-not-personal", "personal subject"]],
+  3: [["no-sector-fit", "sector-fit"]],
+  4: [["no-specific-number", "specific number"], ["weak-cta", "strong CTA"]],
+};
+const lvl = (x: unknown) => Math.min(4, Math.max(1, Math.floor(Number(x)) || 1));
+export const checksAt = (level: unknown): [string, string][] =>
+  Object.entries(LEVEL_NEW).filter(([k]) => Number(k) <= lvl(level)).flatMap(([, v]) => v).map(([c, l]) => [c, c === "too-long" && lvl(level) >= 3 ? "length ≤90w" : l]);
+const CHECK_LABEL: Record<string, string> = Object.fromEntries(Object.values(LEVEL_NEW).flat());
+const checkLabel = (c: string, level?: unknown) => (c === "too-long" && lvl(level) >= 3 ? "90 words" : c === "no-sector-fit" ? "sector-fit" : CHECK_LABEL[c] ?? c);
+/** The bar a view works under: newest active bar doc, else the objective's own level/target, else level 1 · 80%. */
+function barNow(s: LiveState): { version: number | null; level: number; target: number; checks: string[]; fresh: string[]; earned: Doc | null; doc: Doc | null } {
+  const o = s.objective;
+  const doc = (typeof o?.bar_version === "number" ? s.bars.find((b) => b.version === o.bar_version) : null) ?? [...(s.bars ?? [])].reverse().find((b) => b.status === "active") ?? null;
+  const level = lvl(doc?.level ?? o?.level ?? 1);
+  const target = typeof doc?.target_pct === "number" ? doc.target_pct : typeof o?.target === "number" ? o.target : typeof o?.end_state?.target === "number" ? o.end_state.target : 80;
+  const checks = arr(doc?.checks).length ? arr(doc?.checks) : checksAt(level).map(([c]) => c);
+  return { version: doc?.version ?? o?.bar_version ?? null, level, target, checks, fresh: arr(doc?.new_checks), earned: doc?.earned_by ?? null, doc };
+}
 const secs = (ms: number) => (ms < 0 ? "" : ms < 100_000 ? `${Math.round(ms / 1000)}s` : `${Math.round(ms / 60000)}m`);
 const short = (id: unknown) => `…${String(id ?? "").slice(-6)}`;
 const money = (m: unknown) => (typeof m === "number" ? `$${m >= 1000 ? `${(m / 1000).toFixed(1)}B` : `${Math.round(m)}M`}` : "?");
@@ -362,7 +386,8 @@ type Item =
   | { kind: "change"; at: number; c: Doc }
   | { kind: "verdict"; at: number; c: Doc }
   | { kind: "resume"; at: number; r: Doc }
-  | { kind: "batch"; at: number; ob: Doc; prev: Doc | null };
+  | { kind: "batch"; at: number; ob: Doc; prev: Doc | null }
+  | { kind: "bar"; at: number; e: Doc };
 
 function Json({ doc, title, onOpen }: { doc: Doc | undefined | null; title: string; onOpen: (t: string, d: Doc) => void }) {
   if (!doc) return null;
@@ -431,7 +456,8 @@ function DraftRow({ d, s, prevAt, open, toggle, onOpen }: { d: Doc; s: LiveState
           </Step>
           <Step label="QA gate" off={at - start} total={total} raw={d} rawTitle={`drafts · ${short(d._id)} · qa`} onOpen={onOpen}>
             <div className="qchips">
-              {QA_ORDER.map(([cls, lbl]) => {
+              {d.qa_level != null && <span className="qc qlvl">L{lvl(d.qa_level)}</span>}
+              {checksAt(d.qa_level).map(([cls, lbl]) => {
                 const bad = fails.some((f) => f.class === cls);
                 return <span key={cls} className={`qc ${bad ? "x" : "ok"}`}>{bad ? "✘" : "✔"} {lbl}</span>;
               })}
@@ -499,6 +525,63 @@ function VerdictDivider({ c, onOpen }: { c: Doc; onOpen: (t: string, d: Doc) => 
       <Json doc={c} title={`harness_config · v${c.version}`} onOpen={onOpen} />
       <span className="dvl" />
     </div>
+  );
+}
+
+function BarDivider({ e, s, onOpen }: { e: Doc; s: LiveState; onOpen: (t: string, d: Doc) => void }) {
+  const raised = e.kind === "bar_raised";
+  const dt: Doc = e.detail ?? {};
+  const to: Doc = dt.to ?? dt.bar ?? {};
+  const fresh = arr(dt.new_checks);
+  const words = fresh.map((c) => checkLabel(c, to.level));
+  if (raised && lvl(to.level) >= 3 && lvl(dt.from?.level) < 3 && !words.includes("90 words")) words.push("90 words");
+  const ob = s.objectives.find((x) => x._id === e.objective_id);
+  const href = ob ? `/runs/${ob._id}${dbQ() ? `?${dbQ().slice(0, -1)}` : ""}` : null;
+  return (
+    <div className={`divider bar ${raised ? "raised" : "held"}`}>
+      <span className="dvl" />
+      <span className="dvt">
+        {raised ? (
+          <>
+            <b>▲ BAR RAISED</b> → level {to.level ?? "?"} · {to.target_pct ?? "?"}% · new checks: {words.length ? words.join(", ") : "none (target only)"} · earned by{" "}
+            {href ? <a href={href}>batch {dt.batch ?? "?"}</a> : `batch ${dt.batch ?? "?"}`} ({dt.first_try_pct ?? "?"}%)
+          </>
+        ) : (
+          <>
+            <b>BAR HELD</b> at level {to.level ?? "?"} · {to.target_pct ?? "?"}% · batch {dt.batch ?? "?"} reached {dt.first_try_pct ?? "?"}%{dt.reached === false ? " (not earned)" : ""}
+          </>
+        )}
+      </span>
+      <Json doc={e} title={`events · ${e.kind}`} onOpen={onOpen} />
+      <span className="dvl" />
+    </div>
+  );
+}
+
+function BarPanel({ s }: { s: LiveState }) {
+  const b = barNow(s);
+  const earnedOb = b.earned ? s.objectives.find((x) => x._id === b.earned!.objective_id) : null;
+  return (
+    <section className="panel barpanel">
+      <div className="phead">
+        <h3>The bar</h3>
+        <span className="vtag">{b.version != null ? `bar v${b.version} · ` : ""}rises only when earned</span>
+      </div>
+      <div className="barnums">
+        <div><div className="mk">Level</div><div className="bnv">{b.level}<span className="of">/4</span></div></div>
+        <div><div className="mk">Target</div><div className="bnv">{b.target}%</div></div>
+        <div className="barearn">
+          <div className="mk">Earned by</div>
+          <div>{b.earned ? <>{earnedOb ? <a href={`/runs/${earnedOb._id}${dbQ() ? `?${dbQ().slice(0, -1)}` : ""}`}>batch {b.earned.batch}</a> : `batch ${b.earned.batch}`} · {b.earned.first_try_pct}% first-try</> : <span className="dimtxt">seed bar</span>}</div>
+        </div>
+      </div>
+      <div className="shk">Active checks ({b.checks.length})</div>
+      <div className="chips">
+        {b.checks.map((c) => (
+          <span key={c} className={`chip barchk ${b.fresh.includes(c) || (c === "too-long" && b.fresh.includes("no-sector-fit")) ? "new" : ""}`}>{checkLabel(c, b.level)}</span>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -633,7 +716,8 @@ export default function Live({ objectiveId }: { objectiveId?: string } = {}) {
       done, total: s.accounts.length, workers,
     };
   }, [s.drafts, s.accounts]);
-  const target = typeof end?.target === "number" ? end.target : 80;
+  const bar = barNow(s);
+  const target = bar.target ?? (typeof end?.target === "number" ? end.target : 80);
 
   const items = useMemo(() => {
     const drafts = cls ? s.drafts.filter((d) => (d.qa?.failures ?? []).some((f: Doc) => f.class === cls)) : s.drafts;
@@ -645,13 +729,14 @@ export default function Live({ objectiveId }: { objectiveId?: string } = {}) {
       if (c.change && t(c.created_at) >= since && t(c.created_at) <= until) out.push({ kind: "change", at: t(c.created_at), c });
       if (c.outcome?.decided_at && t(c.outcome.decided_at) >= since && t(c.outcome.decided_at) <= until) out.push({ kind: "verdict", at: t(c.outcome.decided_at), c });
     }
+    for (const e of s.events) if ((e.kind === "bar_raised" || e.kind === "bar_held") && t(e.created_at) >= since) out.push({ kind: "bar", at: t(e.created_at), e });
     for (const r of s.resumes) {
       const ob = s.objectives.find((x) => x._id === r.objective_id);
       if (ob && Math.abs(t(r.created_at) - t(ob.created_at)) < 60_000) continue; // the batch divider already marks the start
       out.push({ kind: "resume", at: t(r.created_at), r });
     }
     return out.sort((a, b) => b.at - a.at);
-  }, [s.drafts, s.harness_config, s.resumes, s.objectives, o?.created_at]);
+  }, [s.drafts, s.harness_config, s.resumes, s.objectives, s.events, o?.created_at]);
   const [limit, setLimit] = useState(60);
   const shown = useMemo(() => {
     let n = 0;
@@ -700,6 +785,9 @@ export default function Live({ objectiveId }: { objectiveId?: string } = {}) {
             it.kind === "batch" ? (
               <BatchDivider key={`b${it.ob._id}`} ob={it.ob} prev={it.prev} s={s} onOpen={onOpen} />
             ) :
+            it.kind === "bar" ? (
+              <BarDivider key={`e${it.e._id}`} e={it.e} s={s} onOpen={onOpen} />
+            ) :
             it.kind === "draft" ? (
               <DraftRow
                 key={it.d._id}
@@ -733,7 +821,7 @@ export default function Live({ objectiveId }: { objectiveId?: string } = {}) {
       <aside className="side">
         <div className="goalcard">
           <div className="gk">🔒 Locked goal · the destination</div>
-          <div className="gv">every account done · first-try QA pass ≥ <b>{target}%</b></div>
+          <div className="gv">every account done · first-try QA pass ≥ <b>{target}%</b> · at bar level <b>{bar.level}</b></div>
         </div>
         <div className="bignums">
           <div className="meter">
@@ -752,6 +840,7 @@ export default function Live({ objectiveId }: { objectiveId?: string } = {}) {
             </div>
           </div>
         </div>
+        <BarPanel s={s} />
         <BatchRates s={s} target={target} written={s.drafts.length} />
         {!detail && <RunControl alive={alive} />}
         <ShapePanel s={s} now={now} />

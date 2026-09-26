@@ -7,7 +7,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const PER_OBJECTIVE = ["checkpoints", "decisions", "failures", "resumes", "policies", "taps", "events", "rubrics", "drafts"] as const;
-const GLOBAL = ["harness_config"] as const;
+const GLOBAL = ["harness_config", "bars"] as const;
 // inflight: one row per harness worker, rewritten ≤ every 300 ms while the model streams (NOW WRITING strip)
 const WATCHED = ["objectives", "accounts", "inflight", ...GLOBAL, ...PER_OBJECTIVE];
 const NO_EMBED = { projection: { embedding: 0 } };
