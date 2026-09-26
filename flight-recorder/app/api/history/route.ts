@@ -1,6 +1,6 @@
 // Replay source: real Atlas history (objectives in the last N hours + everything attached to them). Read-only.
 import type { Document } from "mongodb";
-import { waypointsDb } from "@/lib/mongo";
+import { dbParam, waypointsDb } from "@/lib/mongo";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -19,7 +19,7 @@ export async function GET(request: Request) {
     since = new Date();
     since.setHours(h, m, 0, 0);
   } else if (sp && !Number.isNaN(Date.parse(sp))) since = new Date(sp);
-  const db = waypointsDb();
+  const db = waypointsDb(dbParam(request));
   const objectives = await db.collection("objectives").find({ created_at: { $gte: since } }).sort({ created_at: 1 }).limit(50).toArray();
   const ids = objectives.map((o) => o._id);
   const out: Record<string, Document[]> = { objectives };

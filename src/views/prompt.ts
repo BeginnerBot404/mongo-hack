@@ -2,12 +2,13 @@
 // the sales pack's base prompt + the enabled fragment texts of the current harness_config version,
 // assembled the same way demo/harness.ts does. Redraws on every harness_config change.
 //   bun run view:prompt [--db waypoints_smoke]
-import type { Document } from "mongodb";
+import { ObjectId, type Document } from "mongodb";
 import { getFragments, type Fragment } from "../fragments";
 import {
   DB_NAME, bcyan, bgreen, bmagenta, bold, bred, byellow, cols, db, dim, f2, follow, green, hhmmss, oneLine, paint, red, rows, wrap, yellow,
 onResize, } from "./common";
 
+const toId = (x: any) => (typeof x === "string" && /^[0-9a-f]{24}$/.test(x) ? new ObjectId(x) : x);
 const CURRENT = ["active", "probation", "kept"];
 const AGENT = "waypoints-harness"; // demo/harness.ts AGENT
 
@@ -35,7 +36,24 @@ for (const name of ["outreach", "sales"]) {
 }
 
 // ---- harness SHAPE (outreach settings: context_sources / granted_tools / reasoning) ----
-const BASE_TOOLS = ["next_account", "submit_email", "checkpoint", "recall"];
+// What the model sees (demo/packs/outreach.ts visibleTools): granted optional tools (+ precheck when required) + submit_email.
+// next_account / checkpoint are driven by the harness itself, not offered to the model.
+const OPTIONAL_TOOLS = ["outline_email", "lookup_account", "precheck_email"];
+const visibleTools = (st: Document) => [
+  ...OPTIONAL_TOOLS.filter((t) => ((st.granted_tools ?? []) as string[]).includes(t) || (t === "precheck_email" && ((st.required_tools ?? []) as string[]).includes(t))),
+  "submit_email",
+];
+/** Mirror of demo/packs/outreach.ts systemPrompt() (not exported there), minus the catalog body. */
+function outreachBase(st: Document): string {
+  const req = (st.required_tools ?? []) as string[];
+  return (
+    `You are an SDR at Northwind Forge, a (fictional) hardware vendor. You write first-touch cold emails to B2B accounts.\n` +
+    (((st.context_sources ?? []) as string[]).includes("product_catalog") ? `\nProducts and list prices: [product catalog, 7 products]\n` : "") +
+    `\nStyle: short, friendly, specific to the account. One email per account: a subject line and a plain-text body, signed "Alex, Northwind Forge".\n` +
+    `Work through tools only (${visibleTools(st).join(", ")}). Do not explain; call the tools. Finish every account with submit_email.\n` +
+    (req.includes("precheck_email") ? `submit_email is refused unless precheck_email passed on that exact subject and body first.\n` : "")
+  );
+}
 const isOutreach = (st: Document) => Array.isArray(st?.context_sources) || Array.isArray(st?.granted_tools) || st?.reasoning != null;
 /** The axis a settings change moves (docs/OUTREACH-PACK.md sentinel table). */
 function axisOf(field: string, s0: Document, s1: Document): string {
@@ -77,11 +95,11 @@ async function reasonLine(d: Document): Promise<string> {
   let s = `${r.kind ?? "?"}`;
   try {
     if (r.kind === "tap" && r.id) {
-      const tap = await db.collection("taps").findOne({ _id: r.id });
+      const tap = await db.collection("taps").findOne({ _id: toId(r.id) });
       if (tap) {
         s = `tap ${f2(tap.risk)}`;
         if (tap.trigger?.kind === "failure" && tap.trigger.id) {
-          const f = await db.collection("failures").findOne({ _id: tap.trigger.id });
+          const f = await db.collection("failures").findOne({ _id: toId(tap.trigger.id) });
           if (f?.class) {
             const n = await db.collection("failures").countDocuments({ class: f.class, ...(f.objective_id ? { objective_id: f.objective_id } : {}) });
             s = `${f.class}${n > 1 ? ` ×${n}` : ""} (tap ${f2(tap.risk)})`;
@@ -89,7 +107,7 @@ async function reasonLine(d: Document): Promise<string> {
         } else if (tap.trigger?.kind) s += ` ← ${tap.trigger.kind}`;
       }
     } else if (r.kind === "failure" && r.id) {
-      const f = await db.collection("failures").findOne({ _id: r.id });
+      const f = await db.collection("failures").findOne({ _id: toId(r.id) });
       if (f?.class) {
         const n = await db.collection("failures").countDocuments({ class: f.class, ...(f.objective_id ? { objective_id: f.objective_id } : {}) });
         s = `${f.class}${n > 1 ? ` ×${n}` : ""}`;
@@ -113,12 +131,23 @@ async function onNewVersion(next: Cfg, prev: Cfg | null) {
   const s1: Document = next.doc.settings ?? {};
   const fields = [...new Set([...Object.keys(s0), ...Object.keys(s1)])].filter((k) => prev && JSON.stringify(s0[k]) !== JSON.stringify(s1[k]));
   const deltas = fields.map((k) => setDelta(k, s0[k], s1[k]));
-  const axes = [...new Set(fields.map((k) => axisOf(k, s0, s1)))];
+  let axes = [...new Set(fields.map((k) => axisOf(k, s0, s1)))];
+  if (fields.includes("required_tools") && fields.includes("granted_tools")) axes = axes.filter((a) => a !== "tool access"); // guardrail macro: one version, two fields
+  // prefer the sentinel's own label (taps.axis / change_words) when this version came from a tap
+  let words = "";
+  try {
+    const r = next.doc.reason ?? {};
+    if (r.kind === "tap" && r.id) {
+      const tap = await db.collection("taps").findOne({ _id: toId(r.id) });
+      if (tap?.axis) axes = [String(tap.axis)];
+      if (tap?.change_words) words = String(tap.change_words);
+    }
+  } catch {}
   const stLabel = next.status === "probation" ? "trial" : next.status;
   block.push(
     `${t} ${bold(`${from} → v${next.version}`)} ${statusColor(next.status)(`(${stLabel})`)}${deltas.length ? ` · ${bcyan(deltas.join(" · "))}` : ""} · reason: ${await reasonLine(next.doc)}`,
   );
-  if (axes.length) block.push(`   ${byellow(bold(`▲ ${axes.join(" + ").toUpperCase()}`))}${dim(" — the harness changed its own " + axes.join(" and "))}`);
+  if (axes.length) block.push(`   ${byellow(bold(`▲ ${axes.join(" + ").toUpperCase()}`))}${dim(words ? ` — it ${words}` : " — the harness changed its own " + axes.join(" and "))}`);
   const before = new Set(prev?.ids ?? []);
   const after = new Set(next.ids);
   const plus = next.ids.filter((i) => !before.has(i));
@@ -151,6 +180,7 @@ async function refresh() {
 }
 
 function promptText(c: Cfg): { base: string; rules: Fragment[] } {
+  if (isOutreach(c.doc.settings ?? {})) return { base: outreachBase(c.doc.settings), rules: getFragments(c.ids) };
   return { base: BASE ?? "[base prompt]", rules: getFragments(c.ids) };
 }
 
@@ -173,9 +203,9 @@ function shapeLines(c: Cfg, prev: Document): string[] {
   const tool = (n: string) => {
     const lock = req.includes(n) ? "🔒" : "";
     const txt = `${n}${lock}`;
-    return fresh(n, [...BASE_TOOLS, ...pg]) || (lock && !pr.includes(n)) ? bgreen(bold(`+${txt}`)) : txt;
+    return fresh(n, [...visibleTools(prev), ...pg]) || (lock && !pr.includes(n)) ? bgreen(bold(`+${txt}`)) : txt;
   };
-  const tools = [...BASE_TOOLS, ...granted.filter((g) => !BASE_TOOLS.includes(g))].map(tool);
+  const tools = visibleTools(st).map(tool);
   const ctxs = ctx.map((x) => (fresh(x, pc) ? bgreen(bold(`+${x}`)) : x));
   const reason = st.reasoning === "on" ? bgreen(bold("ON (thinking)")) : dim("off");
   const reasonShown = lastPrev && prev.reasoning !== st.reasoning && st.reasoning === "on" ? bgreen(bold("+ON (thinking)")) : reason;
@@ -216,7 +246,7 @@ function render() {
   L.push(...shownDiff, dim("─".repeat(W)));
 
   const baseLines = wrap(base, W).map((l) => dim(l));
-  if (!BASE) baseLines.push(yellow(`(base prompt not importable${baseNote ? `: ${baseNote}` : ""}; showing fragments only)`));
+  if (!BASE && !isOutreach(current.doc.settings ?? {})) baseLines.push(yellow(`(base prompt not importable${baseNote ? `: ${baseNote}` : ""}; showing fragments only)`));
   const budget = H - L.length - ruleLines.length - 1;
   if (baseLines.length > budget) {
     const keep = Math.max(0, budget - 1);

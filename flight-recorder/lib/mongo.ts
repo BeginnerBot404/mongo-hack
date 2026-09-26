@@ -12,6 +12,9 @@ export function mongo(): MongoClient {
   return g.__frMongo;
 }
 
-export function waypointsDb(): Db {
-  return mongo().db(process.env.WAYPOINTS_DB ?? "waypoints");
+/** `name` comes from ?db= (only waypoints / waypoints_<suffix> are allowed); default $WAYPOINTS_DB or "waypoints". */
+export function waypointsDb(name?: string | null): Db {
+  const pick = name && /^waypoints(_\w{1,40})?$/.test(name) ? name : process.env.WAYPOINTS_DB ?? "waypoints";
+  return mongo().db(pick);
 }
+export const dbParam = (request: Request) => new URL(request.url).searchParams.get("db");

@@ -66,7 +66,9 @@ function fragDiff(change: Doc | null | undefined): { add: string[]; del: string[
   }
   return { add: [], del: [], other: `${field}: ${JSON.stringify(from)} → ${JSON.stringify(to)}` };
 }
-const diffLabel = (c: Doc) => {
+const diffLabel = (c: Doc): string => {
+  // guardrail versions carry a second field: change.also = {field, from, to}
+  if (c.change?.also) return [diffLabel({ ...c, change: { ...c.change, also: undefined } }), diffLabel({ ...c, change: c.change.also })].join(" · ");
   const d = fragDiff(c.change);
   if (d.other) return d.other;
   const parts = [...d.add.map((x) => `+${x}`), ...d.del.map((x) => `−${x}`)];
@@ -357,6 +359,12 @@ function useParams() {
   return p;
 }
 
+/** ?db=waypoints_smoke passes through to the API routes. */
+const dbQ = () => {
+  const d = typeof location !== "undefined" ? new URLSearchParams(location.search).get("db") : null;
+  return d ? `db=${encodeURIComponent(d)}&` : "";
+};
+
 function useStream(objective: string | null, fx: boolean, ready: boolean, replay?: { speed: number; hours: number; since: string | null }) {
   const [rdata, setRdata] = useState<ReplayData | null>(null);
   const [s, setS] = useState<State>(EMPTY);
@@ -369,7 +377,7 @@ function useStream(objective: string | null, fx: boolean, ready: boolean, replay
     if (replay) {
       let stop = false;
       (async () => {
-        const h = await (await fetch(`/api/history?hours=${replay.hours}${replay.since ? `&since=${encodeURIComponent(replay.since)}` : ""}`, { cache: "no-store" })).json();
+        const h = await (await fetch(`/api/history?${dbQ()}hours=${replay.hours}${replay.since ? `&since=${encodeURIComponent(replay.since)}` : ""}`, { cache: "no-store" })).json();
         if (stop) return;
         setRdata(buildReplay(h));
         setStatus("live");
@@ -397,7 +405,7 @@ function useStream(objective: string | null, fx: boolean, ready: boolean, replay
       );
       return () => timers.forEach(clearTimeout);
     }
-    const es = new EventSource(`/api/stream${objective ? `?objective=${encodeURIComponent(objective)}` : ""}`);
+    const es = new EventSource(`/api/stream?${dbQ()}${objective ? `objective=${encodeURIComponent(objective)}` : ""}`);
     es.addEventListener("snapshot", (e) => {
       setS({ ...EMPTY, ...JSON.parse((e as MessageEvent).data) });
       setStatus("live");
@@ -850,7 +858,12 @@ function Story({ s, primary, target, unit, down, now, curCfgs }: { s: State; pri
   const wm = /v\d+:\s*(\d+)\s+([\w-]+)\s+in\s+(\d+)[^→]*→\s*v\d+:\s*(\d+)\s+in\s+(\d+)/.exec(String(change?.outcome?.why ?? ""));
   const watch = change?.probation?.watch_class ? problemName(change.probation.watch_class) : wm ? problemName(wm[2]) : "the problem";
   const active = verdict ? 4 : change ? 3 : lastFail ? 2 : 1;
-  const oc = outreach && change ? outreachChange(change, curCfgs) : null;
+  const oc0 = outreach && change ? outreachChange(change, curCfgs) : null;
+  // the sentinel's own tap carries axis + change_words: label from the tap, words ours when recognised
+  const cap = (x: string) => x.charAt(0).toUpperCase() + x.slice(1);
+  const oc = oc0
+    ? { axis: tap?.axis ? cap(String(tap.axis)) : oc0.axis, words: oc0.words }
+    : outreach && change && tap?.change_words ? { axis: tap.axis ? cap(String(tap.axis)) : "Change", words: `it ${String(tap.change_words)}.` } : null;
   const lastCp = s.checkpoints[s.checkpoints.length - 1];
   const acc = bearingOf(lastCp, "accounts_done");
   const accTarget = acc.target ?? ((o.bearings ?? []) as Doc[]).find((b) => b.name === "accounts_done")?.target ?? null;

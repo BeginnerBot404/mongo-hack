@@ -1,7 +1,7 @@
 // SSE: one snapshot of the newest objective, then every change in the waypoints DB.
 // Events: `snapshot` (full state), `change` ({coll, op, id, doc}), `ping` (heartbeat), `error`.
 import { ObjectId, type ChangeStream, type Document } from "mongodb";
-import { waypointsDb } from "@/lib/mongo";
+import { dbParam, waypointsDb } from "@/lib/mongo";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -11,8 +11,8 @@ const GLOBAL = ["harness_config"] as const;
 const WATCHED = ["objectives", ...GLOBAL, ...PER_OBJECTIVE];
 const NO_EMBED = { projection: { embedding: 0 } };
 
-async function snapshot(pinned?: ObjectId | null) {
-  const db = waypointsDb();
+async function snapshot(pinned?: ObjectId | null, dbName?: string | null) {
+  const db = waypointsDb(dbName);
   const objective = pinned
     ? await db.collection("objectives").findOne({ _id: pinned })
     : await db.collection("objectives").findOne({}, { sort: { created_at: -1 } });
@@ -40,6 +40,7 @@ async function snapshot(pinned?: ObjectId | null) {
 export async function GET(request: Request) {
   const pinParam = new URL(request.url).searchParams.get("objective");
   const pinned = pinParam && ObjectId.isValid(pinParam) ? new ObjectId(pinParam) : null;
+  const dbName = dbParam(request);
   const enc = new TextEncoder();
   let stream: ChangeStream | null = null;
   let hb: ReturnType<typeof setInterval> | null = null;
@@ -74,7 +75,7 @@ export async function GET(request: Request) {
       hb = setInterval(() => send("ping", { at: new Date() }), 15_000);
 
       try {
-        const db = waypointsDb();
+        const db = waypointsDb(dbName);
         stream = db.watch(
           [
             { $match: { operationType: { $in: ["insert", "update", "replace", "delete"] }, "ns.coll": { $in: WATCHED } } },
@@ -84,7 +85,7 @@ export async function GET(request: Request) {
         );
         // Open the stream before the snapshot so nothing written in between is lost (client dedupes by _id).
         const first = await stream.tryNext();
-        let snap = await snapshot(pinned);
+        let snap = await snapshot(pinned, dbName);
         let currentId = (snap.objective as Document | null)?._id?.toString() ?? null;
         let currentUpdated = new Date(((snap.objective as Document | null)?.updated_at as Date | undefined) ?? 0);
         send("snapshot", snap);
@@ -96,7 +97,7 @@ export async function GET(request: Request) {
           if (coll === "objectives") {
             if (ch.operationType === "delete") {
               if (id === currentId && !pinned) {
-                snap = await snapshot();
+                snap = await snapshot(null, dbName);
                 currentId = (snap.objective as Document | null)?._id?.toString() ?? null;
                 send("snapshot", snap);
               }
@@ -106,7 +107,7 @@ export async function GET(request: Request) {
               if (pinned) return;
               const upd = new Date((doc.updated_at as Date | undefined) ?? 0);
               if (!currentId || ch.operationType === "insert") {
-                snap = await snapshot(doc._id as ObjectId);
+                snap = await snapshot(doc._id as ObjectId, dbName);
                 currentId = id;
                 currentUpdated = upd;
                 send("snapshot", snap);
