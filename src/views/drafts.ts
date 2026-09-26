@@ -96,6 +96,25 @@ const tick = (reload: boolean) => {
   });
 };
 
+if (process.argv.includes("--fixture")) {
+  // dev-only: in-memory sample drafts, nothing read from or written to Atlas
+  const acct = ["Acme Corporation", "Betasoloin", "Bioholding", "Cancity", "Codehow", "Condax"];
+  acct.forEach((a, i) => queuePos.set(a, i + 1));
+  queueSize = 24;
+  const now = Date.now();
+  const mk = (i: number, pass: boolean, attempt = 1, failures: Document[] = []) => ({
+    account: acct[i], subject: `Faster field ops for ${acct[i]}`, attempt, settings_version: pass ? 2 : 1, agent: "waypoints-harness",
+    body: `Hi ${acct[i]} team, with 2,822 employees across your Dublin office, keeping hardware consistent is hard. Our GTX Pro ($4,821) standardizes deployments. Worth a 15-minute call next week?`,
+    qa: { pass, failures }, created_at: new Date(now - (10 - i) * 20000),
+  });
+  drafts = [
+    mk(0, false, 1, [{ class: "invented-fact", detail: '"$120M" is not in the record (revenue_musd 1100.04)' }]),
+    mk(0, true, 2), mk(1, true), mk(2, false, 1, [{ class: "missing-cta", detail: "no question in the last 2 sentences" }, { class: "too-long", detail: "137 words" }]),
+    mk(3, true), mk(4, false, 1, [{ class: "invented-fact", detail: '"founded in 1998" but year_established is 1981' }]),
+  ];
+  render();
+  process.exit(0);
+}
 tick(true);
 onResize(() => tick(false));
 await follow(
