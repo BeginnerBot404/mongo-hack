@@ -47,3 +47,8 @@ Live: 3-minute demo + 2-minute Q&A, hard cut at 5 minutes.
 - Commit small and often.
 - Never read, print, or commit `.env`.
 - Don't bypass the pre-commit hook (`.githooks/pre-commit`).
+
+## Reference docs (check before writing integration code — avoid API drift)
+- `docs/STACK.md` — verified TS quick-reference: OpenRouter routers & cost fields, Atlas vector search + autoEmbed, Voyage, LangGraph.js, Strands.
+- `docs/refs/` — raw official doc snapshots (see its README for sources).
+- Live docs via MCP: `docs-langchain`, `langchain-reference`, `openrouter`, `strands-agents`, MongoDB plugin.
