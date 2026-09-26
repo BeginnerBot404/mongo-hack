@@ -58,7 +58,9 @@ function buildModel(reasoning: "on" | "off", tools: StructuredToolInterface[]) {
     // vLLM chat-template switch (GLM): reasoning "on" = enable_thinking. modelKwargs is spread into the request body.
     ...(gb10 ? { modelKwargs: { chat_template_kwargs: { enable_thinking: think } } } : {}),
   });
-  return { llm: m.bindTools(tools, { parallel_tool_calls: false }), label: `${gb10 ? "gb10" : "openrouter"}:${model} · reasoning ${reasoning}` };
+  // Reasoning off: tool_choice "required" (vLLM guided decoding) stops GLM from planning in plain text: ~120 tokens
+  // per draft instead of ~900. Reasoning on: "auto", so the thinking channel runs before the tool call.
+  return { llm: m.bindTools(tools, { parallel_tool_calls: false, ...(tools.length ? { tool_choice: think ? "auto" : "required" } : {}) }), label: `${gb10 ? "gb10" : "openrouter"}:${model} · reasoning ${reasoning}` };
 }
 
 export async function runOutreach(o: OutreachOpts): Promise<void> {
