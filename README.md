@@ -1,209 +1,216 @@
-# Waypoints
+# The Waypoints harness
 
-An MCP server that gives any agent harness crash-proof long-horizon memory and self-adopted policy, on MongoDB Atlas.
+A self-modifying agent harness whose memory, settings and guardrails live in MongoDB Atlas. It can change its route, never its destination.
 
 Built during the Harness Engineering & Model Wrangling Hackathon on 2026-09-26.
 
 ## The problem
 
 - An agent's working state lives in its context window. A crash, `kill -9` or context reset wipes it, and the next session starts from zero.
-- That state belongs to one harness. A different agent can't pick up where the first one stopped.
-- Agents repeat the same class of mistake because nothing turns a failure into a standing rule.
+- A harness that "improves itself" usually means a model rewriting its own prompt. Nothing stops it drifting away from the goal, and nothing undoes a bad change.
+- Long runs fail quietly: a fix that breaks something that used to work looks like progress until someone reads the test output.
 
-Tracks:
+## Tracks
 
-- **Long Horizon Engineering**: objectives, measurable bearings, ordered waypoints and checkpoints live in Atlas. Any session can call `resume` and get the state back.
-- **Recursive Harnessing**: a failure class that recurs becomes a versioned policy through `adapt`. Every later session gets that policy from `resume`.
+- **Long Horizon Engineering.** The objective, an immutable end state, numeric bearings, waypoints and checkpoints live in Atlas. After a crash, `resume` rebuilds a bounded working state. A hard metric (the tracked bearing) drives everything: when it drops, the server itself logs a `regression` failure.
+- **Recursive Harnessing.** The harness's own settings (prompt fragments, required tools, sentinel threshold, model) are versioned documents in `harness_config`. A sentinel scores risk on every failure and checkpoint. When it taps, a separate surgeon role changes one setting through a deterministic gate, on probation, and the change is kept or rolled back automatically from the bearing.
 
 ## How it works
 
-Waypoints is one stdio MCP server (`src/server.ts`). The harness stays whatever it already is. It mounts Waypoints and calls its tools.
-
 ```mermaid
 flowchart LR
-  subgraph Harnesses
-    H[Hermes Agent<br/>Nous Research]
-    L[LangGraph.js agent<br/>demo/langgraph-agent.ts]
-    C[Claude Code /<br/>any MCP client]
+  subgraph H["Waypoints harness (LangGraph.js, demo/harness.ts)"]
+    A[agent loop<br/>prompt = base + fragments]
   end
-  OR[OpenRouter<br/>models for demo agents]
-  H -. LLM calls .-> OR
-  L -. LLM calls .-> OR
-  H -- MCP stdio --> S
-  L -- MCP stdio --> S
-  C -- MCP stdio --> S
-  S[Waypoints server<br/>8 tools]
-  V[Voyage AI<br/>voyage-4 embed + rerank-2.5]
-  S -- embed / rerank --> V
+  OR[OpenRouter<br/>harness models]
+  A -. LLM calls .-> OR
+  A <-- "MCP stdio" --> SA["Waypoints MCP server<br/>--role agent"]
+  SA -- embed / rerank --> V[Voyage AI<br/>voyage-4 + rerank-2.5]
   subgraph Atlas["MongoDB Atlas (db: waypoints)"]
-    O[(objectives)]
-    CP[(checkpoints)]
-    D[(decisions)]
-    F[(failures)]
-    P[(policies)]
-    R[(resumes)]
-    M[(memories<br/>vector index memories_vec)]
+    DB[(objectives, checkpoints,<br/>decisions, failures, memories,<br/>resumes, policies)]
+    HC[(harness_config<br/>$jsonSchema validator)]
+    T[(taps)]
+    E[(events)]
   end
-  S --> O & CP & D & F & P & R & M
+  SA <--> DB
+  SA -- read --> HC
+  DB -- change stream --> S[sentinel<br/>deterministic risk score]
+  S -. optional advisory .-> J[Jev on OpenRouter]
+  S -- writes --> T
+  S <-- "MCP stdio" --> SS["Waypoints MCP server<br/>--role surgeon<br/>deterministic gate"]
+  SS -- transaction --> HC
+  SS --> DB
+  Atlas -- change stream --> FR[flight recorder<br/>Next.js, SSE]
 ```
 
-Every checkpoint, decision and failure is also written to `memories` as text plus a 1024-dim `voyage-4` embedding. `recall` runs `$vectorSearch` on `memories_vec`, filtered by `kind` and `objective_id`, then reranks the results with `rerank-2.5`. When Voyage is unavailable, memories are stored without a vector and `recall` returns the most recent matches.
+1. The harness calls `resume`, then `get_settings`. Its system prompt is a fixed base prompt plus the text of the enabled fragments.
+2. After every test run it calls `checkpoint` with the pass count and the `settings_version` it is running. If the model skips that checkpoint, the harness writes it (`required_tools: ["checkpoint"]`).
+3. If the tracked bearing dropped since the previous checkpoint, the server inserts a `regression` failure, a memory and an `auto_failure` event.
+4. The sentinel sees the failure on a change stream, computes the risk score and, above the current threshold, decides an action. For a regression with `verify_whole_suite` off, it calls the surgeon's `apply_settings_change`, which creates a new `harness_config` version on probation.
+5. The next `checkpoint` or `resume` response carries `settings.reload: true` and the open tap. The harness calls `get_settings` again and rebuilds its prompt.
+6. On each later checkpoint the sentinel calls `evaluate_probation`. After 2 checkpoints the version is kept if the bearing is at or above its baseline and the watched class didn't recur. Otherwise it is rolled back in a transaction.
+7. The flight recorder streams all of this from Atlas change streams.
 
-## The 8 tools
+Every checkpoint, decision and failure is also stored in `memories` with a 1024-dim `voyage-4` embedding. `recall` runs `$vectorSearch` on `memories_vec` and reranks with `rerank-2.5`. If Voyage is unavailable (4s timeout, no retries, 60s pause after a 429), memories are stored without a vector and `recall` returns the most recent matches.
 
-Every tool that takes `agent` records which harness made the call (e.g. `"hermes"`, `"langgraph"`).
+## Key ideas
 
-| Tool | What it does | Writes |
-|---|---|---|
-| `set_objective` | Starts an objective with a goal, numeric bearings (`name`, `target`, `unit`) and ordered waypoints (`title`, `done_when`). The first waypoint becomes active. | `objectives` |
-| `checkpoint` | Saves a working-state snapshot (`state_summary`, `open_threads`, `next_action`) with a per-objective sequence number. Can also update bearings (`bearings_current`) and mark a waypoint done (`waypoint_done`), which advances the active waypoint. | `checkpoints`, `objectives`, `memories` |
-| `resume` | Called first in a new session. Rebuilds the objective, bearings with delta to target, the current waypoint, the last checkpoint, open threads, next action, the last 3 decisions, the last 3 failures with postmortems, active policies, and `previous_agent`. Without `objective_id` it picks the most recently updated active objective. | `resumes` |
-| `log_decision` | Appends a decision with its rationale and optional evidence. | `decisions`, `memories` |
-| `log_failure` | Records a typed failure (class normalized to lowercase-kebab) and returns a deterministic postmortem: occurrence count, prior failures of the same class, `is_recurring`, and a suggested policy. | `failures`, `memories` |
-| `recall` | Semantic search over past checkpoints, decisions and failures (`kind`, `objective_id`, `limit` ≤ 20). | none |
-| `adapt` | Promotes a failure's suggested policy to an active, versioned policy if the gate passes. Supersedes the previous active version for that class. | `policies` |
-| `list_policies` | Lists policies by status (`active` by default, or `superseded` / `any`), optionally for one objective. | none |
+- **Immutable end state.** `set_objective` writes `end_state: { description, bearing, target }` once. No tool updates it. `harness_config` can't express it either: the `$jsonSchema` validator sets `additionalProperties: false` at every level, and the gate only accepts the four settings fields. The harness can change its route, never its destination.
+- **Settings are versioned documents.** Each `harness_config` version changes exactly one field (`change: { field, from, to }`) and records its parent and reason. Inserting a version and superseding the previous one happen in one transaction. The current config is the highest version with status `active`, `probation` or `kept`.
+- **Probation, then kept or rolled back automatically.** A new version starts on probation with the last checkpoint's bearing as its baseline. `evaluate_probation` decides after 2 checkpoints. A rollback marks the version `rolled_back` and re-inserts the parent's settings as a new `active` version, so history is never rewritten.
+- **A fixed prompt-fragment library.** `src/fragments.ts` holds five fragments (`checkpoint_every_test`, `recall_before_edit`, `verify_whole_suite`, `one_change_per_edit`, `read_policies_first`). Settings select fragment ids. The model never writes its own prompt text.
+- **Role separation.** The harness mounts the agent role, which can read settings but has no tool that writes them. Settings and policy writes (`adapt`, `apply_settings_change`, `rollback_settings`, `evaluate_probation`) exist only on the surgeon role, which only the sentinel mounts. `docs/atlas-roles.md` describes an optional Atlas custom role that makes `harness_config` and `policies` read-only for the agent's DB user as a second wall. `bun run setup` does not create it.
+- **A deterministic risk score.** `risk = 0.4·similarity + 0.3·recurrence + 0.3·trend`, each component in 0..1:
+  - similarity: the best `$vectorSearch` score of the new failure against earlier failures on the objective (term-frequency cosine if the failure has no embedding)
+  - recurrence: `min(1, (count of class − 1) / 2)`
+  - trend: regression = 1, stall (bearing flat for 3 checkpoints) = 0.6, otherwise 0
+  The action is chosen in code. Jev (`typesafe/jev-router`) can be asked for advice with `SENTINEL_ADVISOR=jev`. Its answer is stored on the tap and never decides anything.
+- **Failures from the hard metric.** The agent can log failures itself, but it doesn't have to notice a regression: a drop in the tracked bearing makes the server log one.
+- **Policies from recurring failures.** When a class recurs and the tap isn't a settings change, the sentinel calls `adapt`. Its gate is also deterministic: at least 2 occurrences of the class, or `explicit_approval`.
 
-## Data model
+## Tools per role
 
-One database (`WAYPOINTS_DB`, default `waypoints`). `bun run setup` creates the collections, their indexes and the vector index.
+`bun run src/server.ts --role agent|surgeon` (default `agent`).
 
-- `objectives`: goal, `status` (`active`/`completed`), bearings, waypoints, `checkpoints_count`, `agent`, `last_agent`.
-- `checkpoints`: state snapshot per `seq`, with a bearings snapshot, active waypoint and token estimate.
+Agent role (what the harness, or any MCP client, mounts):
+
+| Tool | What it does |
+|---|---|
+| `set_objective` | Goal, numeric bearings, ordered waypoints and the immutable `end_state` (default: the first bearing's target). |
+| `checkpoint` | Saves a state snapshot and bearing values. Returns `settings { current_version, reload }`, the latest open tap and `end_state`. Logs an automatic `regression` failure if the tracked bearing dropped. |
+| `resume` | Call first. Returns the objective, end state, bearings, current waypoint, last checkpoint, open threads, next action, last 3 decisions, last 3 failures with postmortems, active policies, `previous_agent`, settings status and any open tap. |
+| `log_decision` | Appends to the decision ledger. |
+| `log_failure` | Records a typed failure and returns a deterministic postmortem (occurrence count, prior failures, suggested policy). |
+| `recall` | Semantic search over checkpoints, decisions and failures. Writes a `recall` event. |
+| `get_settings` | Current version, status, settings and the enabled fragments' `{ id, title, text }`. |
+| `list_policies` | Active (or superseded / all) policies. |
+
+Surgeon role (mounted only by the sentinel):
+
+| Tool | What it does |
+|---|---|
+| `adapt` | Promotes a failure's suggested policy to a versioned policy if the gate passes. |
+| `apply_settings_change` | Changes one setting through the gate. Refused while another version is on probation, or if the value is unchanged or not in the enums. |
+| `rollback_settings` | Rolls back the current version and re-activates its parent's settings as a new version. |
+| `evaluate_probation` | Keeps or rolls back the version on probation. |
+
+## Collections
+
+One database (`WAYPOINTS_DB`, default `waypoints`). `bun run setup` creates collections, indexes, the `memories_vec` vector index and the `harness_config` validator, and seeds settings v1.
+
+- `objectives`: goal, immutable `end_state`, bearings, waypoints, status, `last_agent`.
+- `checkpoints`: state snapshot per `seq`, with a bearings snapshot.
 - `decisions`: append-only decision ledger.
-- `failures`: typed failure plus its postmortem.
-- `policies`: versioned rules adopted from failures, with provenance and the gate result.
-- `resumes`: one event per `resume` call (`resumed_by`, `previous_agent`, `from_checkpoint_seq`).
-- `memories`: embedded text of every checkpoint, decision and failure (`kind`, `source_id`), indexed by `memories_vec`.
+- `failures`: typed failures with postmortems (`auto: true` when the server logged a regression).
+- `memories`: embedded text of every checkpoint, decision and failure.
+- `resumes`: one document per `resume` call (who resumed, from which checkpoint, previous agent).
+- `policies`: versioned rules adopted from recurring failures, with the gate result.
+- `harness_config`: one document per settings version, validated by `$jsonSchema`.
+- `taps`: every sentinel score (risk, components, weights, trigger, advisor, deterministic decision). Below-threshold scores are recorded but never delivered.
+- `events`: plain-English narration for the flight recorder (`recall`, `settings_reload`, `tap_acknowledged`, `probation_verdict`, `auto_failure`).
 
-Example `checkpoints` document:
-
-```js
-{
-  _id: ObjectId("..."),
-  objective_id: ObjectId("..."),
-  seq: 3,
-  state_summary: "Fixed billableDays off-by-one; 6/10 tests pass.",
-  open_threads: ["paginate returns one item too many", "taxCents rounding"],
-  next_action: "Fix the paginate end index",
-  bearings_snapshot: [{ name: "tests_passing", current: 6, target: 10, unit: "tests" }],
-  active_waypoint_index: 1,
-  waypoint_completed_index: null,
-  token_estimate: 31,
-  agent: "hermes",
-  created_at: ISODate("2026-09-26T...")
-}
-```
-
-Example `policies` document:
+Example `harness_config` document after a regression tap (shape from `src/settings.ts`, values illustrative):
 
 ```js
 {
   _id: ObjectId("..."),
-  objective_id: ObjectId("..."),
-  rule: "Before fix the paginate end index, check for off-by-one.",
-  class: "off-by-one",
-  from_failure_id: ObjectId("..."),
-  version: 1,
-  status: "active",            // becomes "superseded" (with superseded_at) when a newer version is adopted
-  reversible: true,
-  gate: {
-    passed: true,
-    rule: "class must have at least 2 occurrences on this objective, or explicit_approval must be true",
-    occurrences_of_class: 2,
-    explicit_approval: false
+  version: 2,
+  status: "probation",                  // later "kept", or "rolled_back" plus a new "active" v3
+  settings: {
+    prompt_fragments: ["checkpoint_every_test", "read_policies_first", "verify_whole_suite"],
+    required_tools: ["checkpoint"],
+    sentinel_threshold: 0.25,
+    model: "anthropic/claude-sonnet-5"
   },
-  agent: "langgraph",
+  parent_version: 1,
+  change: { field: "prompt_fragments",
+            from: ["checkpoint_every_test", "read_policies_first"],
+            to: ["checkpoint_every_test", "read_policies_first", "verify_whole_suite"] },
+  reason: { kind: "tap", id: ObjectId("..."), summary: "Regression (risk ...): verify the whole suite after each fix" },
+  probation: { checkpoints_required: 2, baseline_bearing: 8, watch_class: "regression", started_seq: 5 },
+  outcome: null,                        // { decided_at, verdict: "kept" | "rolled_back", why }
+  created_by: "surgeon",
   created_at: ISODate("2026-09-26T...")
 }
 ```
 
-The `rule` is built from a template, `Before <next_action>, check for <class>.`, using the last checkpoint's `next_action`.
+## Long horizon, honestly
 
-## Why the policy gate is deterministic
+We can't show billions of tokens in a one-day hackathon, and we don't claim to. What the design does instead:
 
-- **Model proposes, code approves.** The agent decides when to call `adapt`. Whether a policy is adopted is decided in code (`ADAPT_MIN_OCCURRENCES = 2` in `src/waypoints.ts`): the failure class needs at least 2 occurrences on the objective, or the caller passes `explicit_approval: true`. No LLM is in the loop. The postmortem is also computed from database counts, not generated.
-- **Auditable.** Every policy stores the gate result, the source `from_failure_id` and the adopting agent. `resume` returns `from_failure_agent`, so you can see that Hermes's failure became a rule that LangGraph followed.
-- **Reversible.** Policies are versioned per class. Adopting a new version marks the old one `superseded` instead of deleting it.
+- **The agent's working context stays bounded.** `resume` returns the latest checkpoint, the last 3 decisions, the last 3 failures and the active policies (at most one per failure class), whatever the length of the history. A session restarted after checkpoint 5 or checkpoint 5,000 starts from a payload of the same shape.
+- **Atlas holds the unbounded history.** Every checkpoint, decision, failure, resume, tap and settings version is kept as a document.
+- **Recall retrieves on demand.** Older context comes back through `recall` (vector search plus rerank) only when the agent or a tap asks for it.
+- **Bearings and the sentinel keep the run pointed at the end state.** The tracked bearing is checked at every checkpoint, a drop becomes a failure automatically, and the sentinel reacts to regressions and stalls without the agent having to notice them.
+
+The demo shows the mechanism on a short task: a hard kill, a resume from Atlas, and a settings change judged by the metric.
 
 ## Demo
 
-A small TypeScript fixture (`demo/fixture/invoice.ts`) has 5 planted bugs (2 `off_by_one`, 2 `unit_conversion`, 1 `rounding`). The goal is 10/10 tests passing. Both harnesses follow the same spec, `demo/task.md`. The bearing is `tests_passing`.
+The fixture (`demo/fixture/`) is a small invoice module with 10 tests, a few planted bugs and one trap: the obvious fix to a helper breaks a test that was passing. The end state is `tests_passing` = 10. See `demo/README.md` for the current flags.
 
 ```sh
-bun run demo:clean       # wipe demo objectives from the Waypoints DB, restore the buggy fixture
-bun run demo:hermes      # Hermes Agent works the task via Waypoints; prints its pid
-kill -9 <pid>            # from a second terminal, after a checkpoint or two: simulated crash
-bun run demo:langgraph   # LangGraph.js agent calls resume (previous_agent: hermes) and finishes
+bun run demo:clean                 # wipe Waypoints documents, reset harness_config to seed v1, restore the fixture
+bun run setup                      # collections, indexes, validator, seed (idempotent)
+bun run sentinel                   # second pane: change streams, risk scores, taps
+cd flight-recorder && bun run dev  # third pane: http://localhost:3100 (or `bun run watch` in the terminal)
+bun run harness --fresh            # new objective; kill -9 it mid-task (or use --die-after N)
+bun run harness                    # resumes from the last checkpoint and finishes
 ```
 
-What to look for:
-
-1. Hermes calls `set_objective`, then after every `bun test` it calls `checkpoint` with the pass count. It logs one typed failure per failing test. When a class recurs, `adapt` turns it into a policy.
-2. After `kill -9` there is no graceful shutdown and no handoff.
-3. The LangGraph agent's `resume` returns the objective, current waypoint, open threads, `next_action`, recent failures, active policies and `previous_agent: "hermes"`. It continues from that state and the bearing climbs to 10.
-
-LangGraph agent options: `--fresh` (new objective), `--max-steps N`, `--die-after N` (the agent SIGKILLs itself, a fallback demo that doesn't need Hermes), `DEMO_MODEL=<slug>`, `WAYPOINTS_DEBUG=1`. See `demo/README.md`.
-
-Still being built during the event (the command names are listed, but check `package.json` for what has landed): `bun run watch` (live view of Waypoints writes), `bun run demo:layout`.
+What to look for: `◎ END STATE` at start, the resume after `kill -9`, `▼ BEARING DROP` when the trap fix lands, `▲ TAP risk … → adjust_settings`, `⟳ SETTINGS v1 → v2 (probation): +verify_whole_suite`, the probation verdict in the sentinel pane and flight recorder, and `✔ all green`.
 
 ## Run it yourself
 
-Prerequisites:
-
-- bun ≥ 1.4 (bson crashes on import under bun 1.3.x)
-- A MongoDB Atlas cluster (we used the Atlas Hackathon Sandbox)
-- A Voyage AI API key
-- An OpenRouter API key (only needed by the demo agents)
-- For `demo:hermes`: Hermes Agent installed at `~/.local/bin/hermes`, or set `HERMES_BIN`
-
-Setup:
+Prerequisites: bun ≥ 1.4 (bson crashes on import under bun 1.3.x), a MongoDB Atlas cluster (we used the Atlas Hackathon Sandbox), a Voyage AI key and an OpenRouter key.
 
 ```sh
 bun install
-cp .env.example .env   # then fill in MONGODB_URI, VOYAGE_API_KEY, OPENROUTER_API_KEY
+cp .env.example .env   # fill in MONGODB_URI, VOYAGE_API_KEY, OPENROUTER_API_KEY
 bun run check          # smoke-tests MongoDB, OpenRouter and Voyage credentials
-bun run setup          # creates collections, indexes and the memories_vec vector index (idempotent)
+bun run setup          # collections, indexes, memories_vec, harness_config validator + seed v1
 bun run smoke          # exercises the tools against Atlas
-bun run server         # starts the MCP server on stdio
 ```
 
-Bun loads `.env` from the current working directory. Start the server from the repo root, or pass the variables to it yourself.
+Flight recorder: `cd flight-recorder && bun install && ln -sf ../.env .env.local && bun run dev`.
 
-From Claude Code:
+### Using Waypoints from Claude Code or any MCP client
+
+Mount the agent role. Your client gets the same memory, end state and settings the harness uses, without any settings-writing tools.
 
 ```sh
-claude mcp add waypoints -- bun --cwd /abs/path/to/mongo-hack run src/server.ts
+claude mcp add waypoints -- bun --cwd /abs/path/to/mongo-hack run src/server.ts --role agent
 ```
-
-From any MCP client (stdio):
 
 ```json
 {
   "mcpServers": {
     "waypoints": {
       "command": "bun",
-      "args": ["run", "src/server.ts"],
+      "args": ["run", "src/server.ts", "--role", "agent"],
       "cwd": "/abs/path/to/mongo-hack"
     }
   }
 }
 ```
 
-If your client has no `cwd` option, pass `MONGODB_URI`, `VOYAGE_API_KEY` and, optionally, `WAYPOINTS_DB` through its `env` block instead.
+Bun loads `.env` from the working directory. If your client has no `cwd` option, pass `MONGODB_URI`, `VOYAGE_API_KEY` and, optionally, `WAYPOINTS_DB` through its `env` block.
 
 ## Built with
 
-- **MongoDB Atlas**: document store for all state, and Atlas Vector Search (`$vectorSearch` on `memories_vec`)
+- **MongoDB Atlas**: all state, `$jsonSchema` validation, multi-document transactions, change streams (sentinel and flight recorder) and Atlas Vector Search
 - **Voyage AI**: `voyage-4` embeddings and `rerank-2.5`
-- **OpenRouter**: models for the demo agents
-- **LangGraph.js** with `@langchain/mcp-adapters`: our resuming demo agent
-- **Hermes Agent** (Nous Research): third-party harness used as-is in the demo. We wrote only its config and launch script (`demo/hermes/`).
-- **MCP TypeScript SDK** (`@modelcontextprotocol/sdk`), zod, bun
+- **OpenRouter**: harness models (Claude Sonnet 5 by default, with a fallback) and the optional Jev advisor
+- **LangGraph.js** with `@langchain/mcp-adapters` and `@langchain/openai`: the harness loop
+- **MCP TypeScript SDK** (`@modelcontextprotocol/sdk`): the server and the sentinel's surgeon client
+- **Next.js**: the flight recorder
+- zod, bun, TypeScript
+
+Third-party components we did not write: LangGraph.js and the other SDKs and libraries in `package.json` and `flight-recorder/package.json`, and the official documentation snapshots in `docs/refs/`. Hermes Agent (Nous Research) was used in an earlier version of the demo. Its config and launch script remain in `demo/hermes/`, but it is not part of the product or the demo.
 
 ## Built at the hackathon
 
-All code in this repo was written on 2026-09-26 during the event. The first commit is at 10:37 ET, and the git history is the record. We did not write these third-party components: Hermes Agent, the SDKs and libraries listed in `package.json`, and the official documentation snapshots in `docs/refs/`.
+All code in this repo was written on 2026-09-26 during the event. The first commit is at 10:37 ET, and the git history is the record.
 
 ## Submission checklist (internal)
 
