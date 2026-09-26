@@ -2,6 +2,7 @@
 import { ObjectId, type Document } from "mongodb";
 import { waypointsDb as db } from "./clients";
 import { remember } from "./memory";
+import { bearingValue, currentConfig, trackedBearingName } from "./settings";
 
 export type WaypointStatus = "pending" | "active" | "done";
 
@@ -21,9 +22,16 @@ export interface Waypoint {
   completed_at: Date | null;
 }
 
+export interface EndState {
+  description: string;
+  bearing: string;
+  target: number;
+}
+
 export interface Objective {
   _id: ObjectId;
   objective: string;
+  end_state?: EndState;
   status: "active" | "completed";
   bearings: Bearing[];
   waypoints: Waypoint[];
@@ -36,6 +44,61 @@ export interface Objective {
 
 const objectives = () => db.collection<Objective>("objectives");
 const col = (name: string) => db.collection(name);
+
+/** Write a flight-recorder event. `text` is plain English. Never throws. */
+export async function writeEvent(objectiveId: ObjectId | null, kind: string, agent: string, detail: Document, text: string) {
+  try {
+    await col("events").insertOne({ objective_id: objectiveId, kind, agent, detail, text, created_at: new Date() });
+  } catch (err) {
+    console.error("[waypoints] event write failed:", err instanceof Error ? err.message : String(err));
+  }
+}
+
+/** settings + tap block shared by checkpoint and resume. Acknowledges open taps (and writes events for that). */
+async function harnessStatus(objective: Objective, settingsVersion: number | undefined, agent: string) {
+  let current_version: number | null = null;
+  try {
+    current_version = (await currentConfig()).version;
+  } catch {
+    current_version = null;
+  }
+  const reload = settingsVersion !== undefined && current_version !== null && settingsVersion !== current_version;
+  if (reload)
+    await writeEvent(
+      objective._id,
+      "settings_reload",
+      agent,
+      { from_version: settingsVersion, to_version: current_version },
+      `${agent} is running settings v${settingsVersion}; told to reload v${current_version}.`,
+    );
+
+  const now = new Date();
+  const tap = await col("taps").findOneAndUpdate(
+    { objective_id: objective._id, status: "open" },
+    { $set: { status: "acknowledged", acknowledged_at: now, acknowledged_by: agent } },
+    { sort: { created_at: -1 }, returnDocument: "after" },
+  );
+  if (tap) {
+    await col("taps").updateMany(
+      { objective_id: objective._id, status: "open", created_at: { $lte: tap.created_at } },
+      { $set: { status: "acknowledged", acknowledged_at: now, acknowledged_by: agent } },
+    );
+    await writeEvent(
+      objective._id,
+      "tap_acknowledged",
+      agent,
+      { tap_id: tap._id, risk: tap.risk, action: tap.decision?.action ?? null },
+      `${agent} received the sentinel's tap (risk ${Number(tap.risk).toFixed(2)} → ${tap.decision?.action ?? "?"}).`,
+    );
+  }
+  return { settings: { current_version, reload }, tap: tap ?? null, end_state: endStateOf(objective) };
+}
+
+function endStateOf(o: Objective): EndState | null {
+  if (o.end_state) return o.end_state;
+  const b = o.bearings[0];
+  return b ? { description: `${b.name} reaches ${b.target} ${b.unit}`, bearing: b.name, target: b.target } : null;
+}
 
 export function toObjectId(id: string, field = "objective_id"): ObjectId {
   if (!ObjectId.isValid(id)) throw new Error(`${field} "${id}" is not a valid id`);
@@ -80,12 +143,24 @@ export async function setObjective(input: {
   objective: string;
   bearings: { name: string; target: number; unit: string; current?: number }[];
   waypoints: { title: string; done_when: string }[];
+  end_state?: { description?: string; bearing?: string; target?: number };
   agent: string;
 }) {
   const now = new Date();
+  const first = input.bearings[0];
+  const endBearing = input.end_state?.bearing ?? first?.name;
+  if (!endBearing) throw new Error("end_state needs a bearing: pass at least one bearing");
+  const matched = input.bearings.find((b) => b.name === endBearing);
+  if (!matched) throw new Error(`end_state.bearing "${endBearing}" is not one of the bearings`);
+  const endState: EndState = {
+    bearing: endBearing,
+    target: input.end_state?.target ?? matched.target,
+    description: input.end_state?.description ?? `${matched.name} reaches ${input.end_state?.target ?? matched.target} ${matched.unit}`,
+  };
   const doc: Objective = {
     _id: new ObjectId(),
     objective: input.objective,
+    end_state: endState,
     status: "active",
     bearings: input.bearings.map((b) => ({
       name: b.name,
@@ -108,7 +183,15 @@ export async function setObjective(input: {
     updated_at: now,
   };
   await objectives().insertOne(doc);
-  return { objective_id: doc._id, objective: doc.objective, status: doc.status, ...withProgress(doc), agent: input.agent, created_at: now };
+  return {
+    objective_id: doc._id,
+    objective: doc.objective,
+    end_state: endState,
+    status: doc.status,
+    ...withProgress(doc),
+    agent: input.agent,
+    created_at: now,
+  };
 }
 
 // 2. checkpoint
@@ -119,6 +202,7 @@ export async function checkpoint(input: {
   next_action: string;
   bearings_current?: { name: string; current: number }[];
   waypoint_done?: number;
+  settings_version?: number;
   agent: string;
 }) {
   const objectiveId = toObjectId(input.objective_id);
@@ -192,6 +276,31 @@ export async function checkpoint(input: {
   };
   await col("checkpoints").insertOne(checkpointDoc);
 
+  // Auto-failure: the tracked bearing dropped since the previous checkpoint.
+  let autoFailure: { failure_id: ObjectId; from: number; to: number; bearing: string } | null = null;
+  const bearingName = trackedBearingName(bumped);
+  const previous = await col("checkpoints").findOne({ objective_id: objectiveId, seq: { $lt: seq } }, { sort: { seq: -1 } });
+  const before = bearingValue(previous, bearingName);
+  const after = bearingValue(checkpointDoc, bearingName);
+  if (before !== null && after !== null && after < before) {
+    const logged = await logFailure({
+      objective_id: input.objective_id,
+      failure: `Regression: "${bearingName}" dropped from ${before} to ${after} at checkpoint ${seq}. A change broke something that was working.`,
+      class: "regression",
+      context: `Checkpoint ${seq}: ${input.state_summary}`,
+      agent: input.agent,
+      auto: true,
+    });
+    autoFailure = { failure_id: logged.failure_id, from: before, to: after, bearing: bearingName! };
+    await writeEvent(
+      objectiveId,
+      "auto_failure",
+      "waypoints",
+      { failure_id: logged.failure_id, class: "regression", checkpoint_seq: seq, bearing: bearingName, from: before, to: after },
+      `Waypoints logged a regression: ${bearingName} fell from ${before} to ${after} at checkpoint ${seq}.`,
+    );
+  }
+
   await remember({
     kind: "checkpoint",
     source_id: checkpointDoc._id,
@@ -213,12 +322,14 @@ export async function checkpoint(input: {
     token_estimate: tokenEstimate,
     current_waypoint: activeWaypoint,
     objective_status: allDone ? "completed" : "active",
+    auto_failure: autoFailure,
+    ...(await harnessStatus({ ...bumped, bearings, waypoints }, input.settings_version, input.agent)),
     ...(unknownBearings.length ? { unknown_bearings_ignored: unknownBearings } : {}),
   };
 }
 
 // 3. resume
-export async function resume(input: { objective_id?: string; agent: string }) {
+export async function resume(input: { objective_id?: string; settings_version?: number; agent: string }) {
   let objective: Objective | null;
   if (input.objective_id) {
     objective = await getObjective(toObjectId(input.objective_id));
@@ -286,6 +397,7 @@ export async function resume(input: { objective_id?: string; agent: string }) {
     resumed_by: input.agent,
     previous_agent: previousAgent,
     checkpoints_count: checkpointsCount,
+    ...(await harnessStatus(objective, input.settings_version, input.agent)),
   };
 }
 
@@ -319,7 +431,14 @@ export async function logDecision(input: { objective_id: string; decision: strin
 }
 
 // 5. log_failure (postmortem is deterministic, no LLM)
-export async function logFailure(input: { objective_id: string; failure: string; class: string; context: string; agent: string }) {
+export async function logFailure(input: {
+  objective_id: string;
+  failure: string;
+  class: string;
+  context: string;
+  agent: string;
+  auto?: boolean;
+}) {
   const objectiveId = toObjectId(input.objective_id);
   await getObjective(objectiveId);
   const failureClass = normalizeClass(input.class);
@@ -349,6 +468,7 @@ export async function logFailure(input: { objective_id: string; failure: string;
     class_as_reported: input.class,
     context: input.context,
     postmortem,
+    auto: input.auto === true,
     agent: input.agent,
     created_at: now,
   };
