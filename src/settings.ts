@@ -120,7 +120,7 @@ export async function currentConfig(): Promise<HarnessConfig> {
 
 export async function getSettings() {
   const c = await currentConfig();
-  return { version: c.version, status: c.status, settings: c.settings, fragments: getFragments(c.settings.prompt_fragments), outcome: c.outcome };
+  return { version: c.version, status: c.status, settings: c.settings, fragments: getFragments(c.settings.prompt_fragments), outcome: c.outcome, reason: c.reason };
 }
 
 async function writeEvent(objectiveId: ObjectId | null, kind: string, agent: string, detail: Document, text: string, session?: any) {

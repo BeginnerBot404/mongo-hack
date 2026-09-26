@@ -384,7 +384,9 @@ async function main() {
       const f = j.auto_failure;
       log(red(bold(`  ✖ server auto-logged [regression]: ${f.bearing} ${f.from} → ${f.to} (failure …${String(f.failure_id).slice(-6)})`)));
     }
-    const tap = j?.tap;
+    let tap = j?.tap;
+    // A settings tap the harness already applied while waiting after a drop: acknowledged now, not replayed.
+    if (tap?.settings_version_after != null && settings && tap.settings_version_after <= settings.version) tap = null;
     let reloadWanted = j?.settings?.reload === true;
     if (tap) {
       const action = tap.decision?.action ?? tap.action ?? "?";
@@ -442,8 +444,10 @@ async function main() {
             await Bun.sleep(1500);
             const g = await call("get_settings", {});
             if (g.version != null && g.version !== settings.version) {
-              const r = await call("resume", { objective_id: objectiveId, agent: AGENT, settings_version: settings.version });
-              notes.push(...(await handleServerSignals(r, objectiveId)));
+              // No resume call here: a resume is a restart marker on the timeline. The tap doc arrives with the next checkpoint.
+              log(red(bold(`  ▲ TAP ${clip(String(g.reason?.summary ?? "sentinel"), 90)} → adjust_settings (v${g.version}, ${g.status})`)));
+              const n = await reload("tap");
+              if (n) notes.push(n);
               break;
             }
           }
