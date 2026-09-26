@@ -52,3 +52,6 @@ Live: 3-minute demo + 2-minute Q&A, hard cut at 5 minutes.
 - `docs/STACK.md` — verified TS quick-reference: OpenRouter routers & cost fields, Atlas vector search + autoEmbed, Voyage, LangGraph.js, Strands.
 - `docs/refs/` — raw official doc snapshots (see its README for sources).
 - Live docs via MCP: `docs-langchain`, `langchain-reference`, `openrouter`, `strands-agents`, MongoDB plugin.
+
+## History is sacred (Ryan, 16:15)
+The live `waypoints` DB is the demo: never wipe, reset or clear it (no `demo:clean --hard`, no deleteMany, no resetOutreach) — `--hard` refuses unless `WAYPOINTS_ALLOW_WIPE=yes-wipe-live-history`. Experiments and smoke tests use `waypoints_smoke` / `waypoints_test_*`. Replay is how we rewind.
