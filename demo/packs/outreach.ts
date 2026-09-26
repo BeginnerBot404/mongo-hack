@@ -7,7 +7,7 @@
 //   -> harness: log_failure per QA class -> checkpoint (bearings from getQueueStats) -> settings reload / tap / verdicts.
 import { ChatOpenAI } from "@langchain/openai";
 import { tool, type StructuredToolInterface } from "@langchain/core/tools";
-import { AIMessage, HumanMessage, SystemMessage, ToolMessage, type BaseMessage } from "@langchain/core/messages";
+import { AIMessage, AIMessageChunk, HumanMessage, SystemMessage, ToolMessage, type BaseMessage } from "@langchain/core/messages";
 import { MultiServerMCPClient } from "@langchain/mcp-adapters";
 import * as z from "zod";
 import { resolve } from "node:path";
@@ -16,6 +16,7 @@ import { queueSize } from "../../src/outreach/data";
 import { configs } from "../../src/settings";
 import { waypointsDb as wdb } from "../../src/clients";
 import { ObjectId } from "mongodb";
+import { Inflight, glmToolMarkup, partialField } from "./inflight";
 import { bold, clip, cyan, dim, green, log, magenta, red, yellow, parse, textOf } from "../term";
 
 const AGENT = "waypoints-harness";
@@ -57,6 +58,9 @@ function buildModel(reasoning: "on" | "off", tools: StructuredToolInterface[]) {
     timeout: think ? 240_000 : 150_000,
     maxTokens: think ? 4000 : 1500,
     temperature: 0.7,
+    // streamed (the Console's NOW WRITING strip): raw chunks carry vLLM's `delta.reasoning`, which LangChain drops
+    streamUsage: true,
+    __includeRawResponse: true,
     // vLLM chat-template switch (GLM): reasoning "on" = enable_thinking. modelKwargs is spread into the request body.
     ...(gb10 ? { modelKwargs: { chat_template_kwargs: { enable_thinking: think } } } : {}),
   });
@@ -181,7 +185,7 @@ export async function runOutreach(o: OutreachOpts): Promise<void> {
   const logFailure = (cls: string, failure: string, context: string) =>
     call("log_failure", { objective_id: objectiveId, class: cls, failure, context, agent: AGENT });
   const draftSchema = z.object({ subject: z.string().describe("subject line, ≤ 60 characters"), body: z.string().describe("plain-text email body") });
-  type W = { id: number; tag: string; current: any; lastSubmit: any; tools: Record<string, StructuredToolInterface>; llm: any; key: string };
+  type W = { id: number; tag: string; current: any; lastSubmit: any; tools: Record<string, StructuredToolInterface>; llm: any; key: string; inf: Inflight };
   function makeTools(w: W): Record<string, StructuredToolInterface> {
     const t = (fn: (a: any) => Promise<string>, name: string, description: string, schema: z.ZodObject<any>) =>
       tool(fn, { name, description, schema }) as unknown as StructuredToolInterface;
@@ -336,6 +340,49 @@ export async function runOutreach(o: OutreachOpts): Promise<void> {
   const secsPerAccount: number[] = [];
   const trajectory: string[] = [];
   let stopReason = "";
+  /** One model turn, streamed: reasoning, visible text and partial tool-call args go to the worker's inflight row. */
+  async function streamTurn(w: W, llm: any, msgs: BaseMessage[]): Promise<AIMessageChunk> {
+    w.inf.turn();
+    let acc: AIMessageChunk | null = null;
+    const base = w.inf.tokenCount;
+    let n = base;
+    const args = new Map<number, { name: string; args: string }>();
+    for await (const raw of await llm.stream(msgs)) {
+      const c = raw as AIMessageChunk;
+      try {
+        const rr: any = c.additional_kwargs?.__raw_response;
+        if (rr) delete (c.additional_kwargs as any).__raw_response; // never merged into history
+        const delta = rr?.choices?.[0]?.delta ?? {};
+        const reasoning = delta.reasoning ?? delta.reasoning_content;
+        if (typeof reasoning === "string" && reasoning) { n++; w.inf.addReasoning(reasoning); }
+        const text = typeof c.content === "string" ? c.content : "";
+        if (text) { n++; w.inf.addText(text); }
+        for (const tc of c.tool_call_chunks ?? []) {
+          const i = tc.index ?? 0;
+          const cur = args.get(i) ?? { name: "", args: "" };
+          if (tc.name) cur.name = tc.name;
+          if (tc.args) { cur.args += tc.args; n++; }
+          args.set(i, cur);
+          const subject = partialField(cur.args, "subject"), body = partialField(cur.args, "body");
+          if (subject != null || body != null) w.inf.setText(`${subject != null ? `Subject: ${subject}\n\n` : ""}${body ?? ""}`, cur.name || null);
+          else w.inf.set({ phase: "drafting", tool: cur.name || null });
+        }
+        w.inf.tokens(n);
+      } catch {}
+      acc = acc ? acc.concat(c) : c;
+    }
+    if (!acc) throw new Error("empty model stream");
+    // vLLM's streaming GLM tool parser occasionally leaves the call as raw markup in content: recover it
+    if (!acc.tool_calls?.length && typeof acc.content === "string") {
+      const g = glmToolMarkup(acc.content);
+      if (g?.name && (g.complete || g.closed)) {
+        acc = new AIMessageChunk({ content: "", tool_calls: [{ name: g.name, args: g.args, id: `glm-${Date.now().toString(36)}-${w.tag}`, type: "tool_call" }], usage_metadata: acc.usage_metadata });
+      }
+    }
+    if (acc.usage_metadata?.output_tokens) w.inf.tokens(base + acc.usage_metadata.output_tokens); // exact count when the server reports usage
+    return acc;
+  }
+
   async function attempt(w: W, ctxText: string, retryNote: string): Promise<any | null> {
     w.lastSubmit = null;
     const msgs: BaseMessage[] = [
@@ -345,8 +392,8 @@ export async function runOutreach(o: OutreachOpts): Promise<void> {
     const llm = llmFor(w);
     for (let i = 0; i < MAX_TURNS_PER_ATTEMPT && !w.lastSubmit && !stopReason; i++) {
       const ts = Date.now();
-      let msg: AIMessage;
-      try { msg = (await llm.invoke(msgs)) as AIMessage; }
+      let msg: AIMessageChunk;
+      try { msg = await streamTurn(w, llm, msgs); }
       catch (e: any) { log(red(`    ${w.tag} model error: ${clip(String(e?.message ?? e), 100)}`)); return null; }
       turns++;
       const secs = (Date.now() - ts) / 1000;
@@ -360,6 +407,7 @@ export async function runOutreach(o: OutreachOpts): Promise<void> {
       for (const tc of calls) {
         const t = w.tools[tc.name];
         const visible = visibleTools(shape!).includes(tc.name);
+        w.inf.set({ phase: tc.name === "submit_email" ? "qa" : "tool", tool: tc.name }, true);
         const out = t && visible ? String(await t.invoke(tc.args as any)) : JSON.stringify({ error: `tool ${tc.name} is not available to you` });
         toolCalls++;
         msgs.push(new ToolMessage({ content: out, tool_call_id: tc.id ?? "", name: tc.name }));
@@ -391,6 +439,7 @@ export async function runOutreach(o: OutreachOpts): Promise<void> {
       }
       const acc = na.account;
       w.current = acc;
+      w.inf.start({ objective_id: objectiveId!, account: String(acc.account), settings_version: shape!.version });
       const n = (acc.queue_index ?? 0) + 1;
       const ta = Date.now();
       let prev: any = na.attempt > 1 && na.previous_failures.length ? { failures: na.previous_failures, subject: "", body: "" } : null;
@@ -422,6 +471,7 @@ export async function runOutreach(o: OutreachOpts): Promise<void> {
         prev = r;
       }
       secsPerAccount.push((Date.now() - ta) / 1000);
+      w.inf.idle();
     }
   }
 
@@ -462,11 +512,12 @@ export async function runOutreach(o: OutreachOpts): Promise<void> {
 
   const tw = Date.now();
   const workers: W[] = Array.from({ length: Math.max(1, o.workers) }, (_, i) => {
-    const w: W = { id: i + 1, tag: `w${i + 1}`, current: null, lastSubmit: null, tools: {}, llm: null, key: "" };
+    const w: W = { id: i + 1, tag: `w${i + 1}`, current: null, lastSubmit: null, tools: {}, llm: null, key: "", inf: new Inflight(wdb, `w${i + 1}`, AGENT) };
     w.tools = makeTools(w);
     return w;
   });
   await Promise.all(workers.map((w, i) => Bun.sleep(i * 1500).then(() => worker(w))));
+  for (const w of workers) w.inf.idle();
   const wall = (Date.now() - tw) / 1000;
 
   if (shape && (shape as Shape).status === "probation") await serial(() => reload("end of run")).catch(() => false);

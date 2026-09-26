@@ -142,7 +142,7 @@ process.stdout.write(dim("─".repeat(Math.min(W0, 80))) + "\n");
 
 let lastStatus = "";
 await follow(
-  [{ $match: { operationType: { $in: ["insert", "update", "replace", "delete"] } } }],
+  [{ $match: { operationType: { $in: ["insert", "update", "replace", "delete"] }, "ns.coll": { $ne: "inflight" } } }], // inflight = token-rate live rows
   (c) => print(c),
   (s, err) => {
     const line = s === "live" ? green("● live") : red(`○ reconnecting ${err ?? ""}`);
