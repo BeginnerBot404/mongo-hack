@@ -458,6 +458,8 @@ export default function Page() {
   }
   if (crashed && downSince.current === null) downSince.current = alive === false ? now : lastWrite;
   if (!crashed) downSince.current = null;
+  // After 60s down it's probably a deliberate stop, not the demo's kill: fall back to the idle banner (header badge still says down).
+  if (crashed && downSince.current !== null && now - downSince.current > 60000) crashed = false;
   const crash = crashed ? { secs: Math.max(0, Math.round((now - (downSince.current ?? now)) / 1000)), seq: lastCp?.seq ?? null } : null;
   const banner = queue[0]?.start != null ? queue[0].m : null;
 
