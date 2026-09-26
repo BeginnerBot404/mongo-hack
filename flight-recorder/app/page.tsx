@@ -256,9 +256,9 @@ function Banner({ m, crash }: { m: Moment | null; crash: { secs: number; seq: nu
   if (crash)
     return (
       <div className="banner b-crashed">
-        <div className="btitle">✖ HARNESS CRASHED</div>
-        <div className="bsub">
-          process gone {crash.secs}s · everything it knew is in Atlas{crash.seq != null ? ` @ checkpoint #${crash.seq}` : ""}
+        <div className="bmain">
+          <div className="btitle">✖ HARNESS CRASHED · {crash.secs}s</div>
+          <div className="bsub">process gone · everything it knew is safe in Atlas{crash.seq != null ? ` @ checkpoint #${crash.seq}` : ""}</div>
         </div>
       </div>
     );
@@ -277,7 +277,7 @@ function Banner({ m, crash }: { m: Moment | null; crash: { secs: number; seq: nu
 function Route({ s, primary, target, present }: { s: State; primary?: string; target: number; present: boolean }) {
   const cps = s.checkpoints;
   const W = 920;
-  const H = 240;
+  const H = 215;
   const padL = 44, padR = 24, top = 52, bottom = 36;
   const vals = cps.map((c) => bearingOf(c, primary).current).filter((x): x is number => x !== null);
   const yMin = Math.max(0, Math.min(target, ...vals) - 2);
@@ -324,7 +324,7 @@ function Route({ s, primary, target, present }: { s: State; primary?: string; ta
           <g key={p.c._id}>
             <line x1={x(a.i)} y1={y(a.v)} x2={x(p.i)} y2={y(p.v)} className={gap ? "seg gap" : dip ? "seg dip" : "seg"} stroke={dip ? "#fb7185" : vcol(p.ver)} />
             {gap && (
-              <text x={(x(a.i) + x(p.i)) / 2} y={Math.min(y(a.v), y(p.v)) - 14} textAnchor="middle" className="gaptxt">
+              <text x={(x(a.i) + x(p.i)) / 2 + 12} y={(y(a.v) + y(p.v)) / 2 + 22} textAnchor="start" className="gaptxt">
                 ✖ kill → ⟳ resume
               </text>
             )}
@@ -593,7 +593,7 @@ export default function Page() {
                 <span className={hero.nowTests === target ? "good" : "neutral"}>{hero.nowTests ?? "?"}</span>
                 <span className="of">/{target}</span>
               </div>
-              <div className="tfoot">{hero.low !== null ? "from the regression low" : "latest checkpoint"}</div>
+              <div className="tfoot">{hero.low !== null ? "from the regression low" : "since the first checkpoint"}</div>
             </div>
             {cmp("skipped checkpoints", hero.skipsBy)}
             {cmp("regressions", hero.regBy)}
@@ -631,7 +631,7 @@ export default function Page() {
           <section className="feed">
             <h2>what happened</h2>
             {lines
-              .slice(present ? -6 : -20)
+              .slice(present ? (hero.why ? -4 : -5) : -20)
               .reverse()
               .map((l) => (
                 <div key={l.key} className={`line ${l.cls} ${now - l.at < 6000 ? "flash" : ""}`}>

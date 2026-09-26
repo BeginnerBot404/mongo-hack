@@ -26,7 +26,7 @@ h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.12em; color: 
 .badge.dead { border-color: var(--fail); color: #fff; background: #7f1d1d; }
 
 /* ---- banner slot: fixed height so nothing below jumps ---- */
-.bannerslot { height: 104px; margin: 10px 0 8px; }
+.bannerslot { height: 96px; margin: 8px 0 8px; }
 .banner { height: 100%; border-radius: 10px; padding: 10px 20px; display: flex; align-items: center; justify-content: space-between; gap: 18px; color: #fff; animation: pop 0.35s ease-out; overflow: hidden; }
 .bmain { min-width: 0; }
 .btitle { font-size: 40px; font-weight: 900; letter-spacing: 0.02em; line-height: 1.05; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -50,7 +50,7 @@ h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.12em; color: 
 .barval { text-align: right; font-family: var(--mono); }
 
 /* ---- hero ---- */
-.hero { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.hero { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; }
 .tile { background: var(--panel); border: 2px solid var(--line); border-radius: 10px; padding: 8px 14px; }
 .tlabel { font-size: 15px; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 800; color: var(--soft); }
 .tnum { font-size: 52px; font-weight: 900; line-height: 1.05; font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -58,12 +58,12 @@ h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.12em; color: 
 .tnum .of { color: var(--soft); font-size: 34px; }
 .tnum .bad { color: var(--fail); } .tnum .good { color: var(--ok); } .tnum .neutral { color: var(--fg); }
 .tfoot { font-size: 15px; color: var(--soft); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.verdictline { margin-top: 8px; padding: 6px 12px; border-left: 5px solid var(--ok); background: #0d2016; font-family: var(--mono); font-size: 16px; font-weight: 700; color: var(--ok); }
+.verdictline { margin-top: 6px; padding: 4px 12px; border-left: 5px solid var(--ok); background: #0d2016; font-family: var(--mono); font-size: 16px; font-weight: 700; color: var(--ok); }
 
 /* ---- route ---- */
-.routebox { margin-top: 4px; }
+.routebox { margin-top: 0; }
 .tagline { font-style: italic; font-weight: 700; color: var(--accent); font-size: 17px; }
-.route { width: 100%; height: auto; display: block; background: var(--panel); border: 2px solid var(--line); border-radius: 10px; }
+.route { width: 100%; height: auto; max-height: 320px; display: block; background: var(--panel); border: 2px solid var(--line); border-radius: 10px; }
 .route .goal { stroke: var(--accent); stroke-width: 3; stroke-dasharray: 10 6; }
 .route .goaltxt { fill: var(--accent); font: 800 20px var(--sans); }
 .route .axis { fill: var(--soft); font: 700 16px var(--sans); }
@@ -93,7 +93,7 @@ h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.12em; color: 
 .prob { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 15px; font-weight: 700; color: var(--warn); margin-top: 4px; }
 .pip { width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--warn); display: inline-block; }
 .pip.on { background: var(--warn); }
-.why { font-family: var(--mono); font-size: 14px; font-weight: 700; margin-top: 4px; }
+.why { font-family: var(--mono); font-size: 14px; font-weight: 700; margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .raw { font-family: var(--mono); font-size: 12px; line-height: 1.3; max-height: 240px; overflow: auto; background: #05070a; padding: 8px; border-radius: 6px; color: var(--soft); margin: 6px 0 0; }
 
 /* ---- feed ---- */
