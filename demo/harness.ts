@@ -6,6 +6,7 @@
 //   bun run harness                 # resume the latest objective
 //   bun run harness --fresh         # new objective (fixture should be reset first)
 //   flags: --max-steps N (default 40)  --die-after N (SIGKILL self after N tool calls)
+//          --die-after-checkpoint N (SIGKILL self on the next tool result after the Nth checkpoint: mid-task, repeatable)
 //   env:   DEMO_MODEL=<openrouter slug>   DEMO_PROVIDER=gb10 (GB10_BASE_URL, GB10_MODEL, GB10_API_KEY)
 import { ChatOpenAI } from "@langchain/openai";
 import { tool, type StructuredToolInterface } from "@langchain/core/tools";
@@ -51,6 +52,7 @@ const num = (name: string, dflt: number) => {
 const FRESH = flag("--fresh");
 const MAX_STEPS = num("--max-steps", 40);
 const DIE_AFTER = num("--die-after", 0);
+const DIE_AFTER_CHECKPOINT = num("--die-after-checkpoint", 0); // SIGKILL on the first tool result after checkpoint #N
 
 // ---------- terminal log ----------
 const c = (code: number) => (s: string) => (process.stdout.isTTY ? `\x1b[${code}m${s}\x1b[0m` : s);
@@ -233,8 +235,8 @@ function systemPrompt(task: string, s: Settings): string {
 
 // ---------- models ----------
 type Llm = Runnable<BaseMessage[], AIMessage>;
-function chat(model: string, baseURL: string, apiKey: string) {
-  return new ChatOpenAI({ model, apiKey, configuration: { baseURL }, maxRetries: 1, timeout: 90_000, maxTokens: 3000 });
+function chat(model: string, baseURL: string, apiKey: string, fast = { maxRetries: 1, timeout: 90_000 }) {
+  return new ChatOpenAI({ model, apiKey, configuration: { baseURL }, ...fast, maxTokens: 3000 });
 }
 function buildLlm(settingsModel: string | null, tools: StructuredToolInterface[]): { llm: Llm; label: string } {
   const orKey = process.env.OPENROUTER_API_KEY!;
@@ -243,7 +245,8 @@ function buildLlm(settingsModel: string | null, tools: StructuredToolInterface[]
   if (gb10) {
     // GB10 (local vLLM serving GLM) first; OpenRouter's GLM if it is unreachable.
     const m = process.env.GB10_MODEL || "gb10";
-    const primary = chat(m, process.env.GB10_BASE_URL || "http://localhost:8000/v1", process.env.GB10_API_KEY || "none").bindTools(tools);
+    // GB10 decodes ~30 tok/s: a stuck turn fails over to OpenRouter after 45s instead of 2 x 90s.
+    const primary = chat(m, process.env.GB10_BASE_URL || "http://localhost:8000/v1", process.env.GB10_API_KEY || "none", { maxRetries: 0, timeout: 45_000 }).bindTools(tools);
     return { llm: primary.withFallbacks([chat(GLM, OR, orKey).bindTools(tools)]) as unknown as Llm, label: `gb10:${m} → fallback openrouter:${GLM}` };
   }
   const id = process.env.DEMO_MODEL || (settingsModel && settingsModel !== "gb10" ? settingsModel : DEFAULT_MODEL);
@@ -480,7 +483,7 @@ async function main() {
     (kickNotes.length ? `\nHarness notes: ${kickNotes.join(" ")}\n` : "") +
     `\nobjective_id = ${objectiveId}. Go.`;
 
-  let toolCalls = 0, turn = 0;
+  let toolCalls = 0, turn = 0, checkpointsSeen = 0;
   const graph = new StateGraph(MessagesAnnotation)
     .addNode("agent", async (s) => {
       const extra = carryNotes.length ? [new HumanMessage(`Harness notes: ${carryNotes.join(" ")}`)] : [];
@@ -558,10 +561,11 @@ async function main() {
               try { green_ = JSON.parse(raw).all_green === true; } catch {}
             }
             toolCalls++;
-            if (DIE_AFTER && toolCalls >= DIE_AFTER) {
-              log(red(bold(`\n✖ --die-after ${DIE_AFTER}: kill -9 self (pid ${process.pid})`)));
+            if ((DIE_AFTER && toolCalls >= DIE_AFTER) || (DIE_AFTER_CHECKPOINT && name !== "checkpoint" && checkpointsSeen >= DIE_AFTER_CHECKPOINT)) {
+              log(red(bold(`\n✖ ${DIE_AFTER ? `--die-after ${DIE_AFTER}` : `--die-after-checkpoint ${DIE_AFTER_CHECKPOINT}`}: kill -9 self (pid ${process.pid})`)));
               process.kill(process.pid, "SIGKILL");
             }
+            if (name === "checkpoint") checkpointsSeen++;
           }
         }
       }
@@ -576,6 +580,8 @@ async function main() {
   // Probation needs checkpoints under the new settings. If the task finished first, the harness verifies the suite
   // (a real test run + checkpoint) until the sentinel rules, so the verdict lands on stage instead of next session.
   for (let i = 0; green_ && settings && (settings as Settings).status === "probation" && i < 3; i++) {
+    await reload("probation"); // the sentinel may already have ruled on the model's own checkpoints
+    if ((settings as Settings).status !== "probation") break;
     const s0 = settings as Settings;
     const r = await runTests();
     stat().tests++;
