@@ -53,7 +53,7 @@ A fixed library of `{ id, title, text }`. The model never writes prompt text. In
 - `one_change_per_edit`: one bug per edit
 - `read_policies_first`: restate active policies before the first edit
 
-**Seed config v1:** `["checkpoint_every_test", "read_policies_first"]`, required_tools `["checkpoint"]`, threshold 0.6, model `z-ai/glm-5.3-flash`.
+**Seed config v1:** `["checkpoint_every_test", "read_policies_first"]`, required_tools `["checkpoint"]`, threshold **0.25** (a lone regression taps), model **`anthropic/claude-sonnet-5`** (GLM skipped checkpoints in rehearsal).
 
 ### `taps` (NEW)
 ```js
