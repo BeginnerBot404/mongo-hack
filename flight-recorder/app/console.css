@@ -240,7 +240,11 @@ main.console.trace { display: grid; grid-template-columns: minmax(0, 7fr) minmax
 .divider.resume .dvl { background: var(--info); } .divider.resume .dvt b { color: var(--info); }
 .divider.crash .dvl { background: var(--fail); } .divider.crash .dvt b { color: var(--fail); }
 
-.side { min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: var(--gap); }
+.side { min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: var(--gap);
+  position: sticky; top: 70px; align-self: start; max-height: calc(100vh - 82px); padding-right: 4px; overscroll-behavior: contain; scrollbar-width: thin; }
+/* Side panels keep their natural height and the column scrolls, instead of squeezing and clipping panels. */
+.side > * { flex-shrink: 0; }
+.side .panel { overflow: visible; }
 .goalcard { background: var(--panel); border: 1px solid color-mix(in srgb, var(--brand) 45%, transparent); border-radius: 12px; padding: 10px 14px; }
 .bignums { display: grid; grid-template-columns: 1fr 1fr; gap: var(--gap); }
 .bignums .meter { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px; min-width: 0; }
