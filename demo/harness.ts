@@ -2,11 +2,12 @@
 // The harness (not the model) owns the protocol: resume -> get_settings -> system prompt = task pack's base prompt +
 // enabled fragment texts from harness_config (never model-written) -> work -> checkpoint with settings_version
 // after every measurement -> on settings.reload: get_settings again and rebuild the prompt -> on tap: act.
-// Task packs (demo/packs/): `sales` (default: deal-qualification rubric scored on held-out deals) and `invoice`.
+// Task packs (demo/packs/): `outreach` (default: SDR first-touch emails graded by a deterministic QA gate; its own
+// harness-driven loop in packs/outreach.ts), `sales` (deal-qualification rubric) and `invoice`.
 //
 //   bun run harness                 # resume the latest objective (sales)
 //   bun run harness --fresh         # new objective
-//   flags: --task sales|invoice  --max-steps N (sales: proposals, default 15; invoice: turns, default 40)
+//   flags: --task outreach|sales|invoice  --max-steps N (outreach: submissions, default 80; sales: proposals, 15; invoice: turns, 40)
 //          --die-after N (SIGKILL self after N tool calls)
 //          --die-after-checkpoint N (SIGKILL self on the next tool result after the Nth checkpoint: mid-task, repeatable)
 //   env:   DEMO_MODEL=<openrouter slug>   DEMO_PROVIDER=gb10 (GB10_BASE_URL, GB10_MODEL, GB10_API_KEY)
@@ -43,9 +44,9 @@ const str = (name: string, dflt: string) => {
   const i = argv.indexOf(name);
   return i >= 0 && argv[i + 1] ? argv[i + 1]! : dflt;
 };
-const TASK = str("--task", "sales");
+const TASK = str("--task", "outreach");
 const FRESH = flag("--fresh");
-const MAX_STEPS = num("--max-steps", TASK === "sales" ? 15 : 40);
+const MAX_STEPS = num("--max-steps", TASK === "sales" ? 15 : TASK === "outreach" ? 80 : 40); // outreach: max submissions
 const DIE_AFTER = num("--die-after", 0);
 const DIE_AFTER_CHECKPOINT = num("--die-after-checkpoint", 0); // SIGKILL on the first tool result after checkpoint #N
 
@@ -129,8 +130,9 @@ function buildLlm(settingsModel: string | null, tools: StructuredToolInterface[]
     // GB10 (local vLLM serving GLM) first; OpenRouter's GLM if it is unreachable.
     const m = process.env.GB10_MODEL || "gb10";
     // GB10 decodes ~30 tok/s: a stuck turn fails over to OpenRouter after 45s instead of 2 x 90s.
-    const primary = chat(m, process.env.GB10_BASE_URL || "http://localhost:8000/v1", process.env.GB10_API_KEY || "none", { maxRetries: 0, timeout: 45_000 }).bindTools(tools, { parallel_tool_calls: false });
-    return { llm: primary.withFallbacks([chat(GLM, OR, orKey).bindTools(tools, { parallel_tool_calls: false })]) as unknown as Llm, label: `gb10:${m} → fallback openrouter:${GLM}` };
+    // GB10 only (never OpenRouter): the fallback is one retry on GB10 itself.
+    const primary = chat(m, process.env.GB10_BASE_URL || "http://localhost:8000/v1", process.env.GB10_API_KEY || "none", { maxRetries: 1, timeout: 90_000 }).bindTools(tools, { parallel_tool_calls: false });
+    return { llm: primary as unknown as Llm, label: `gb10:${m} (retry once on GB10)` };
   }
   // GLM only: a non-GLM settings model (Sonnet/GPT from an old config) is ignored.
   const id = process.env.DEMO_MODEL || (settingsModel && settingsModel.startsWith("z-ai/") ? settingsModel : DEFAULT_MODEL);
@@ -141,8 +143,12 @@ const endpointOf = (name: string) => (process.env.GB10_MODEL && name === process
 
 // ---------- main ----------
 async function main() {
-  if (!process.env.OPENROUTER_API_KEY) throw new Error("OPENROUTER_API_KEY is not set (bun loads .env from the repo root)");
-  if (TASK !== "sales" && TASK !== "invoice") throw new Error(`--task must be sales or invoice (got ${TASK})`);
+  if (!process.env.OPENROUTER_API_KEY && process.env.DEMO_PROVIDER !== "gb10") throw new Error("OPENROUTER_API_KEY is not set (bun loads .env from the repo root)");
+  if (TASK === "outreach") {
+    const { runOutreach } = await import("./packs/outreach");
+    return runOutreach({ fresh: FRESH, maxSteps: MAX_STEPS, dieAfter: DIE_AFTER, dieAfterCheckpoint: DIE_AFTER_CHECKPOINT, workers: num("--workers", 3) });
+  }
+  if (TASK !== "sales" && TASK !== "invoice") throw new Error(`--task must be outreach, sales or invoice (got ${TASK})`);
   const t0 = Date.now();
 
   const env = Object.fromEntries(Object.entries(process.env).filter((e): e is [string, string] => typeof e[1] === "string"));
