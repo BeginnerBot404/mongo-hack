@@ -1,6 +1,6 @@
 // SSE: one snapshot of the newest objective, then every change in the waypoints DB.
 // Events: `snapshot` (full state), `change` ({coll, op, id, doc}), `ping` (heartbeat), `error`.
-import type { ChangeStream, Document, ObjectId } from "mongodb";
+import { ObjectId, type ChangeStream, type Document } from "mongodb";
 import { waypointsDb } from "@/lib/mongo";
 
 export const runtime = "nodejs";
@@ -37,6 +37,8 @@ async function snapshot(pinned?: ObjectId | null) {
 }
 
 export async function GET(request: Request) {
+  const pinParam = new URL(request.url).searchParams.get("objective");
+  const pinned = pinParam && ObjectId.isValid(pinParam) ? new ObjectId(pinParam) : null;
   const enc = new TextEncoder();
   let stream: ChangeStream | null = null;
   let hb: ReturnType<typeof setInterval> | null = null;
@@ -81,7 +83,7 @@ export async function GET(request: Request) {
         );
         // Open the stream before the snapshot so nothing written in between is lost (client dedupes by _id).
         const first = await stream.tryNext();
-        let snap = await snapshot();
+        let snap = await snapshot(pinned);
         let currentId = (snap.objective as Document | null)?._id?.toString() ?? null;
         let currentUpdated = new Date(((snap.objective as Document | null)?.updated_at as Date | undefined) ?? 0);
         send("snapshot", snap);
@@ -92,7 +94,7 @@ export async function GET(request: Request) {
           const id = String(ch.documentKey?._id ?? "");
           if (coll === "objectives") {
             if (ch.operationType === "delete") {
-              if (id === currentId) {
+              if (id === currentId && !pinned) {
                 snap = await snapshot();
                 currentId = (snap.objective as Document | null)?._id?.toString() ?? null;
                 send("snapshot", snap);
@@ -100,6 +102,7 @@ export async function GET(request: Request) {
               return;
             }
             if (doc && id !== currentId) {
+              if (pinned) return;
               const upd = new Date((doc.updated_at as Date | undefined) ?? 0);
               if (!currentId || ch.operationType === "insert" || upd >= currentUpdated) {
                 snap = await snapshot(doc._id as ObjectId);
