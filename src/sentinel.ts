@@ -53,9 +53,45 @@ async function waitForMemory(sourceId: ObjectId, ms = 10_000): Promise<Document 
   }
 }
 
-async function similarity(failure: Document): Promise<{ score: number; nearest: Document | null }> {
+function termCounts(text: string): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const w of text.toLowerCase().match(/[a-z0-9]{3,}/g) ?? []) counts.set(w, (counts.get(w) ?? 0) + 1);
+  return counts;
+}
+
+function cosine(a: Map<string, number>, b: Map<string, number>): number {
+  let dot = 0;
+  let na = 0;
+  let nb = 0;
+  for (const [w, c] of a) {
+    na += c * c;
+    dot += c * (b.get(w) ?? 0);
+  }
+  for (const c of b.values()) nb += c * c;
+  return na && nb ? dot / Math.sqrt(na * nb) : 0;
+}
+
+/** Degraded similarity when the failure has no embedding (e.g. Voyage rate-limited): term-frequency cosine. */
+async function lexicalSimilarity(failure: Document, memory: Document | null) {
+  const text = String(memory?.text ?? `Failure (${failure.class}): ${failure.failure}\nContext: ${failure.context}`);
+  const earlier = await db
+    .collection("memories")
+    .find({ kind: "failure", objective_id: failure.objective_id, source_id: { $ne: failure._id }, created_at: { $lt: failure.created_at } })
+    .project({ source_id: 1, text: 1, created_at: 1 })
+    .toArray();
+  const mine = termCounts(text);
+  let best: Document | null = null;
+  let bestScore = 0;
+  for (const m of earlier) {
+    const score = cosine(mine, termCounts(String(m.text ?? "")));
+    if (score > bestScore) [best, bestScore] = [{ ...m, score }, score];
+  }
+  return { score: bestScore, nearest: best, method: "lexical (no embedding)" };
+}
+
+async function similarity(failure: Document): Promise<{ score: number; nearest: Document | null; method: string }> {
   const memory = await waitForMemory(failure._id);
-  if (!memory?.embedding) return { score: 0, nearest: null };
+  if (!memory?.embedding) return lexicalSimilarity(failure, memory);
   const hits = await db
     .collection("memories")
     .aggregate([
@@ -75,7 +111,7 @@ async function similarity(failure: Document): Promise<{ score: number; nearest: 
       { $limit: 1 },
     ])
     .toArray();
-  return { score: hits[0]?.score ?? 0, nearest: hits[0] ?? null };
+  return { score: hits[0]?.score ?? 0, nearest: hits[0] ?? null, method: "vector" };
 }
 
 /** regression = 1, stall (tracked bearing flat for 3 checkpoints) = 0.6, else 0. */
@@ -86,7 +122,8 @@ async function trendOf(objectiveId: ObjectId, failureClass?: string): Promise<{ 
   const name = trackedBearingName(objective);
   const last = await db.collection("checkpoints").find({ objective_id: objectiveId }).sort({ seq: -1 }).limit(3).toArray();
   const values = last.map((c) => bearingValue(c, name));
-  if (values.length >= 2 && values[0] !== null && values[1] !== null && values[0] < values[1]) return { score: 1, label: "regression" };
+  const [latest, previous] = values;
+  if (latest != null && previous != null && latest < previous) return { score: 1, label: "regression" };
   if (values.length === 3 && values.every((v) => v !== null && v === values[0])) return { score: 0.6, label: "stall" };
   return { score: 0, label: "none" };
 }
@@ -240,8 +277,9 @@ export class Sentinel {
         settings_version_after: null,
         tap: false,
         hint: null,
+        similarity_method: sim.method,
       });
-      say(`${label}: risk ${risk.toFixed(2)} (sim ${components.similarity}, rec ${components.recurrence}, trend ${components.trend}) < ${threshold} → no tap`);
+      say(`${label}: risk ${risk.toFixed(2)} (sim ${components.similarity} ${sim.method}, rec ${components.recurrence}, trend ${components.trend}) < ${threshold} → no tap`);
     } else {
       const advisor = await askJev({
         failure: failure.failure,
@@ -290,10 +328,11 @@ export class Sentinel {
         settings_version_after: versionAfter,
         tap: true,
         hint: sim.nearest ? `Similar earlier failure: ${String(sim.nearest.text).split("\n")[0]}` : null,
+        similarity_method: sim.method,
       });
       const jev = advisor ? ` [jev: tap=${advisor.tap} ${advisor.action} p=${advisor.probability}]` : "";
       say(
-        `${label}: risk ${risk.toFixed(2)} (sim ${components.similarity}, rec ${components.recurrence}, trend ${components.trend}) ≥ ${threshold} → TAP ${action}${detail}${jev}`,
+        `${label}: risk ${risk.toFixed(2)} (sim ${components.similarity} ${sim.method}, rec ${components.recurrence}, trend ${components.trend}) ≥ ${threshold} → TAP ${action}${detail}${jev}`,
       );
     }
 
@@ -312,6 +351,7 @@ export class Sentinel {
     settings_version_after: number | null;
     tap: boolean;
     hint: string | null;
+    similarity_method?: string;
   }) {
     await db.collection("taps").insertOne({
       _id: t._id ?? new ObjectId(),
@@ -326,6 +366,7 @@ export class Sentinel {
       // Below-threshold scores are recorded for the risk meter but never delivered to the harness.
       status: t.tap ? "open" : "acknowledged",
       hint: t.hint,
+      similarity_method: t.similarity_method ?? null,
       created_at: new Date(),
     });
   }
