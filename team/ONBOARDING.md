@@ -2,6 +2,31 @@
 
 **Ryan is the lead.** Claude Code on Ryan's machine orchestrates the build. You're joining to help: pick a lane below and check with Ryan before touching `src/`.
 
+## No laptop yet? Phone tasks (do these now)
+**Direction as of 13:35** (details in `docs/CONTRACT.md`):
+- **The product:** the Waypoints **harness**, a LangGraph agent whose memory lives in Atlas.
+- **The sentinel** watches for trouble (risk score → "tap").
+- **The surgeon** changes the harness's own settings, but only through a deterministic gate. Each change runs on probation and is either kept or automatically rolled back.
+- **The flight recorder** shows all of it live.
+- **The one fixed rule:** the agent can change its route, but never its destination (the end state is immutable).
+
+1. **Q&A sparring:** grill Ryan with 10 hard judge questions, and time each answer to under 20 seconds. Must-covers:
+   - "Isn't this just RAG?"
+   - "How does this scale to billions of tokens?"
+   - "What stops the agent from rewriting its own goal?"
+   - "Why is the gate deterministic rather than letting the model decide?"
+   - "What's actually running in Atlas?"
+   - "What happens if the sentinel is wrong?"
+2. **60-second video script:** voiceover over a screen recording, not a pitch. Structure:
+   - problem (10s)
+   - kill -9 → resume (15s)
+   - trap → tap → settings change on probation → kept (20s)
+   - Atlas / flight recorder (10s)
+   - close (5s)
+   Write it as spoken lines, and send it to Ryan by 15:15.
+3. **Cerebral Valley answers:** draft the project description (3 sentences), the tracks (Long Horizon Engineering and Recursive Harnessing), the stack (MongoDB Atlas with vector search, change streams, a `$jsonSchema` validator and transactions; Voyage AI; OpenRouter; LangGraph.js; the MCP SDK), and any other questions on the form. Get Ryan to add you to the submission.
+4. **Runner:** food and water for Ryan, find a quiet spot for the 5:00 judging (back rooms clear at 4:30), and confirm the MongoDB.local NYC attendee for 9/30.
+
 ## What we're building (30-second version)
 **Waypoints** is an MCP server that gives *any* agent crash-proof, long-horizon memory, stored in MongoDB Atlas. The agent records its goal and measurable "bearings", checkpoints its state, and logs decisions and typed failures. After a crash or context reset, `resume` rebuilds exactly where it was, **even in a different agent**.
 - Recurring failures become versioned policies (`adapt`), and the agent reads them at the next resume.
