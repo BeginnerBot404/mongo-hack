@@ -2,6 +2,7 @@
 import { MongoServerError } from "mongodb";
 import { mongo, waypointsDb as db } from "../src/clients";
 import { EMBED_DIMENSIONS, VECTOR_INDEX } from "../src/memory";
+import { HARNESS_CONFIG_SCHEMA, seedConfig } from "../src/settings";
 
 if (!process.env.MONGODB_URI) {
   console.error("MONGODB_URI is not set. Nothing to do.");
@@ -10,7 +11,7 @@ if (!process.env.MONGODB_URI) {
 
 type SearchIndexInfo = { name: string; status?: string; queryable?: boolean };
 
-const collections = ["objectives", "checkpoints", "decisions", "failures", "memories", "resumes", "policies"];
+const collections = ["objectives", "checkpoints", "decisions", "failures", "memories", "resumes", "policies", "events", "taps"];
 const existing = new Set((await db.listCollections({}, { nameOnly: true }).toArray()).map((c) => c.name));
 for (const name of collections) {
   if (existing.has(name)) continue;
@@ -29,7 +30,29 @@ for (const name of ["checkpoints", "decisions", "failures", "memories", "resumes
 await db.collection("checkpoints").createIndex({ objective_id: 1, seq: -1 });
 await db.collection("failures").createIndex({ objective_id: 1, class: 1, created_at: 1 });
 await db.collection("policies").createIndex({ objective_id: 1, class: 1, version: -1 });
+await db.collection("events").createIndex({ objective_id: 1, created_at: -1 });
+await db.collection("events").createIndex({ created_at: -1 });
+await db.collection("taps").createIndex({ objective_id: 1, status: 1, created_at: -1 });
 console.log("regular indexes ok");
+
+// harness_config: $jsonSchema validator (collMod when the collection already exists), indexes, seed v1.
+const validation = { validator: { $jsonSchema: HARNESS_CONFIG_SCHEMA }, validationLevel: "strict", validationAction: "error" } as const;
+if (existing.has("harness_config")) {
+  await db.command({ collMod: "harness_config", ...validation });
+  console.log("harness_config validator updated (collMod)");
+} else {
+  await db.createCollection("harness_config", validation);
+  console.log("created collection harness_config with validator");
+}
+const harness = db.collection("harness_config");
+await harness.createIndex({ version: -1 }, { unique: true });
+await harness.createIndex({ status: 1, version: -1 });
+if ((await harness.countDocuments({})) === 0) {
+  await harness.insertOne(seedConfig());
+  console.log("seeded harness_config v1");
+} else {
+  console.log("harness_config already seeded");
+}
 
 const memories = db.collection("memories");
 const [found] = (await memories.listSearchIndexes(VECTOR_INDEX).toArray()) as SearchIndexInfo[];
