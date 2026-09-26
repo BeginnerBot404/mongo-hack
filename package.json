@@ -29,6 +29,7 @@
     "smoke": "bun run scripts/smoke.ts",
     "demo:langgraph": "bun run demo/langgraph-agent.ts",
     "demo:reset": "bash demo/reset.sh",
+    "demo:clean": "bun run demo/clean.ts && bash demo/reset.sh",
     "demo:hermes": "bash demo/hermes/run.sh"
   },
   "engines": {
