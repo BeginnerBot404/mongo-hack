@@ -23,7 +23,10 @@
   "scripts": {
     "check": "bun run src/check.ts",
     "typecheck": "tsc --noEmit",
-    "prepare": "git config core.hooksPath .githooks"
+    "prepare": "git config core.hooksPath .githooks",
+    "server": "bun run src/server.ts",
+    "setup": "bun run scripts/setup-indexes.ts",
+    "smoke": "bun run scripts/smoke.ts"
   },
   "engines": {
     "bun": ">=1.4"
