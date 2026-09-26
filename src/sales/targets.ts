@@ -5,7 +5,7 @@
 // The agent sees holdout AUC after every proposal, so its effective ceiling is the holdout-peeking one (0.905).
 // A 5-rule hand rubric already scores 0.855 and a low-support overfit one 0.862, so T_AUC sits above both:
 // 0.875 = 0.03 below the reachable ceiling and ~0.02 above what a quick or overfit rubric gets.
-export const T_AUC = 0.875;
+export const T_AUC = 0.89; // above the honest train-only ceiling (0.881): reaching it takes sustained iteration, where overfitting and regressions really happen
 /** A-grade win rate target as a fraction (0..1), matching propose_rubric metrics.*.a_win_rate. */
 export const T_WIN = 0.85;
 /** Same target in percent, for the `a_grade_win_rate` bearing whose unit is "%". */
