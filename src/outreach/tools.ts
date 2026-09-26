@@ -5,9 +5,11 @@ import { ObjectId, type Db, type Document } from "mongodb";
 import { waypointsDb } from "../clients";
 import { PRODUCTS, accounts, drafts, productCatalogText, queueSize, type Account, type Product } from "./data";
 import { qa, sentences, type Draft, type QaFailure, type QaResult } from "./qa";
+import { levelForObjective } from "./bar";
 
 export { qa, PRODUCTS, productCatalogText, type Account, type Product, type QaResult, type QaFailure };
-export { QA_CLASSES, type QaClass } from "./qa";
+export { QA_CLASSES, checksAt, type QaClass } from "./qa";
+export { activeBar, barByVersion, ensureBars, levelForObjective, settleBar, type Bar, type BarSettlement } from "./bar";
 
 export { CONTEXT_SOURCES, GRANTABLE_TOOLS, REASONING_MODES, type ContextSource, type GrantableTool, type ReasoningMode } from "../fragments";
 export const MAX_ATTEMPTS = 2;
@@ -19,6 +21,8 @@ export interface DraftDoc {
   subject: string;
   body: string;
   qa: QaResult;
+  /** The rising-bar QA level this draft was graded at (1..4). */
+  qa_level?: number;
   settings_version: number | null;
   attempt: number;
   agent: string;
@@ -156,11 +160,15 @@ export function draftKey(d: { account: string; subject: string; body: string }):
 }
 const prechecked = new Set<string>();
 
-export async function precheck_email(input: Draft & { account: string }, db: Db = waypointsDb): Promise<QaResult | { error: string }> {
+/** Grades at the objective's bar level (objective_id → bar_version → level; missing → 1), or an explicit `level`. */
+export async function precheck_email(
+  input: Draft & { account: string; objective_id?: string; level?: number },
+  db: Db = waypointsDb,
+): Promise<QaResult | { error: string }> {
   const acc = await lookup_account({ account: input.account }, db);
   if ("error" in acc) return acc;
   prechecked.add(draftKey(input));
-  return qa(input, acc);
+  return qa(input, acc, input.level ?? (await levelForObjective(input.objective_id, db)));
 }
 
 /** True when precheck_email ran on this exact draft (in this process). */
@@ -202,7 +210,8 @@ export async function submit_email(input: SubmitInput, db: Db = waypointsDb): Pr
   const objective_id = objKey(input.objective_id);
   const prior = await db.collection("drafts").countDocuments({ objective_id, account: input.account });
   const attempt = prior + 1;
-  const result = qa(input, acc);
+  const level = await levelForObjective(objective_id, db);
+  const result = qa(input, acc, level);
   let settings_version = input.settings_version ?? null;
   if (settings_version === null) {
     const c = await db.collection("harness_config").findOne({ status: { $in: ["active", "probation", "kept"] } }, { sort: { version: -1 } });
@@ -214,6 +223,7 @@ export async function submit_email(input: SubmitInput, db: Db = waypointsDb): Pr
     subject: String(input.subject ?? ""),
     body: String(input.body ?? ""),
     qa: result,
+    qa_level: level,
     settings_version,
     attempt,
     agent: String(input.agent ?? "unknown"),

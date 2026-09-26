@@ -9,8 +9,35 @@ export const QA_CLASSES = [
   "too-long",
   "missing-cta",
   "missing-subject",
+  // rising bar (level 2+)
+  "generic-opener",
+  "subject-not-personal",
+  // level 3+
+  "no-sector-fit",
+  // level 4
+  "no-specific-number",
+  "weak-cta",
 ] as const;
 export type QaClass = (typeof QA_CLASSES)[number];
+
+/** The rising bar: QA levels are cumulative. Level 1 = the original 7 checks. */
+export const MAX_LEVEL = 4;
+export const LEVEL_NEW_CHECKS: Record<number, readonly QaClass[]> = {
+  1: QA_CLASSES.slice(0, 7),
+  2: ["generic-opener", "subject-not-personal"],
+  3: ["no-sector-fit"], // and too-long tightens to 90 words
+  4: ["no-specific-number", "weak-cta"],
+};
+export const clampLevel = (level: unknown): number => {
+  const n = Math.floor(Number(level));
+  return Number.isFinite(n) ? Math.min(MAX_LEVEL, Math.max(1, n)) : 1;
+};
+/** Every QA class active at `level` (cumulative). */
+export function checksAt(level: number): QaClass[] {
+  const l = clampLevel(level);
+  return Object.entries(LEVEL_NEW_CHECKS).filter(([k]) => Number(k) <= l).flatMap(([, v]) => v);
+}
+export const maxWordsAt = (level: number) => (clampLevel(level) >= 3 ? MAX_WORDS_L3 : MAX_WORDS);
 
 export interface Draft {
   subject: string;
@@ -27,6 +54,9 @@ export interface QaResult {
 export type QaAccount = Pick<Account, "account" | "sector" | "year_established" | "revenue_musd" | "employees" | "office_location" | "subsidiary_of">;
 
 export const MAX_WORDS = 120;
+export const MAX_WORDS_L3 = 90;
+export const GENERIC_OPENER = /hope (this|you)|finds you well|wanted to reach out|quick question|touching base|circle back/i;
+export const SPECIFIC_TIME = /monday|tuesday|wednesday|thursday|friday|tomorrow|next week|\d{1,2}(:\d\d)?\s?(am|pm)/i;
 export const MAX_SUBJECT = 60;
 export const FORBIDDEN = /free|guarantee|no risk|discount|\d+% off|best price/i;
 export const PLACEHOLDER = /\[[^\]]+\]|\{[^}]+\}|<[^>]+>|lorem/i;
@@ -50,6 +80,7 @@ export interface FoundNumber {
 export function extractNumbers(text: string): FoundNumber[] {
   let t = text;
   for (const p of PRODUCTS) t = t.replace(new RegExp(esc(p.product), "gi"), " ");
+  t = t.replace(/\b\d{1,2}(?::\d\d)?\s?(?:am|pm)\b/gi, " "); // times of day ("10am", "2:30 pm") in a CTA
   t = t.replace(/\b\d+\s*-?\s*(?:minutes?|mins?|hours?|hrs?|days?|weeks?)\b/gi, " ");
   const out: FoundNumber[] = [];
   const re = /(\$)?\s?(\d[\d,]*(?:\.\d+)?)\s*(%|percent\b|thousand\b|million\b|billion\b|bn\b|mm\b|[kmb]\b)?/gi;
@@ -93,7 +124,17 @@ function firstSentence(body: string): string {
 
 const words = (text: string) => text.split(/\s+/).filter(Boolean).length;
 
-export function qa(draft: Draft, account: QaAccount): QaResult {
+/** True when the text states a record number exactly: employees, revenue (as millions or dollars, ±1% for rounding) or year. */
+function citesRecordNumber(text: string, acc: QaAccount): boolean {
+  return extractNumbers(text).some(
+    (n) =>
+      !n.percent &&
+      (n.bare === acc.year_established || n.value === acc.employees || n.bare === acc.employees || near(n.value, acc.revenue_musd) || near(n.value, acc.revenue_musd * 1e6)),
+  );
+}
+
+export function qa(draft: Draft, account: QaAccount, level = 1): QaResult {
+  const L = clampLevel(level);
   const subject = String(draft.subject ?? "").trim();
   const body = String(draft.body ?? "");
   const failures: QaFailure[] = [];
@@ -132,7 +173,8 @@ export function qa(draft: Draft, account: QaAccount): QaResult {
   if (placeholder) add("placeholder-left", `"${placeholder[0]}"`);
 
   const n = words(body);
-  if (n > MAX_WORDS) add("too-long", `${n} words (max ${MAX_WORDS})`);
+  const maxWords = maxWordsAt(L);
+  if (n > maxWords) add("too-long", `${n} words (max ${maxWords}${L >= 3 ? " at level 3+" : ""})`);
 
   // Ignore a sign-off ("Cheers,\nSam"): trailing lines of 1-3 words without a question mark.
   const all = sentences(body);
@@ -142,6 +184,25 @@ export function qa(draft: Draft, account: QaAccount): QaResult {
 
   if (!subject) add("missing-subject", "empty subject");
   else if (subject.length > MAX_SUBJECT) add("missing-subject", `subject is ${subject.length} characters (max ${MAX_SUBJECT})`);
+
+  // ---- the rising bar ----
+  if (L >= 2) {
+    const opener = first.match(GENERIC_OPENER);
+    if (opener) add("generic-opener", `first sentence opens with a pleasantry ("${opener[0]}"): "${first.slice(0, 80)}"`);
+    if (subject && !subject.toLowerCase().includes(account.account.toLowerCase()))
+      add("subject-not-personal", `subject doesn't name ${account.account}: "${subject.slice(0, 60)}"`);
+  }
+  if (L >= 3) {
+    const sector = has(body, account.sector);
+    const product = PRODUCTS.some((p) => has(body, p.product));
+    if (!sector || !product)
+      add("no-sector-fit", `body must tie a product to their sector (${account.sector}): ${[!sector && "sector not mentioned", !product && "no product named"].filter(Boolean).join(", ")}`);
+  }
+  if (L >= 4) {
+    if (!citesRecordNumber(body, account))
+      add("no-specific-number", `body states no exact record number (employees ${account.employees}, revenue $${account.revenue_musd}M or founded ${account.year_established})`);
+    if (!SPECIFIC_TIME.test(last2)) add("weak-cta", "the ask doesn't propose a specific day or time (e.g. \"Tuesday at 10am\")");
+  }
 
   return { pass: failures.length === 0, failures };
 }

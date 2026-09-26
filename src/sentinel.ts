@@ -7,7 +7,7 @@ import { ObjectId, type ChangeStream, type Document } from "mongodb";
 import { llm, mongo, waypointsDb as db } from "./clients";
 import { VECTOR_INDEX } from "./memory";
 import { GUARDRAIL_MACRO, bearingValue, currentConfig, isOutreach, trackedBearingName, type HarnessConfig } from "./settings";
-import type { HarnessSettings } from "./fragments";
+import type { FragmentId, HarnessSettings } from "./fragments";
 
 export const WEIGHTS = { similarity: 0.4, recurrence: 0.3, trend: 0.3 };
 const OUTREACH_SIM_METHOD = "not computed (outreach: QA class map; risk = 0.3·recurrence + 0.3·trend)";
@@ -56,6 +56,12 @@ export const OUTREACH_QA_CLASSES = [
   "too-long",
   "missing-cta",
   "missing-subject",
+  // rising bar (src/outreach/bar.ts): level 2-4 QA checks
+  "generic-opener",
+  "subject-not-personal",
+  "no-sector-fit",
+  "no-specific-number",
+  "weak-cta",
 ] as const;
 /** Outreach stall: qa_pass_rate within ±STALL_POINTS for STALL_CHECKPOINTS checkpoints (and below the 80% goal). */
 export const STALL_POINTS = 2;
@@ -89,9 +95,28 @@ export function planOutreachChange(cls: string, s: HarnessSettings): PlannedChan
       if (cls === "missing-cta" && !s.prompt_fragments.includes("plain_cta"))
         return { field: "prompt_fragments", value: [...s.prompt_fragments, "plain_cta"], axis: "rules", words: "added the rule: end with a plain 15-minute-call question" };
       return null;
+    // ---- rising bar classes ----
+    case "generic-opener":
+      return addFragment(s, "specific_opener", "added the rule: open with a concrete fact, never a pleasantry");
+    case "subject-not-personal":
+      return addFragment(s, "personal_subject", "added the rule: put the account's name in the subject line");
+    case "no-sector-fit":
+      if (!s.context_sources.includes("account_summary") && !s.context_sources.includes("account_record_full"))
+        return { field: "context_sources", value: [...s.context_sources, "account_summary"], axis: "context policy", words: "gave itself the account's sector and size as context" };
+      return addFragment(s, "sector_fit", "added the rule: tie one product to their sector");
+    case "no-specific-number":
+      if (!s.context_sources.includes("account_record_full"))
+        return { field: "context_sources", value: [...s.context_sources, "account_record_full"], axis: "context policy", words: "gave itself the full account record as context" };
+      return addFragment(s, "cite_one_number", "added the rule: cite one exact number from the record");
+    case "weak-cta":
+      return addFragment(s, "specific_time_cta", "added the rule: propose a specific day and time for the call");
     default:
       return null;
   }
+}
+
+function addFragment(s: HarnessSettings, id: FragmentId, words: string): PlannedChange | null {
+  return s.prompt_fragments.includes(id) ? null : { field: "prompt_fragments", value: [...s.prompt_fragments, id], axis: "rules", words };
 }
 
 /** Continuous bearings (AUC): a drop of at least this much is a regression; within FLAT_EPS for 3 checkpoints is a stall. */

@@ -21,6 +21,12 @@ export const FRAGMENT_IDS = [
   // outreach task (docs/OUTREACH-PACK.md)
   "open_with_record_fact",
   "plain_cta",
+  // outreach rising bar (levels 2-4)
+  "specific_opener",
+  "personal_subject",
+  "sector_fit",
+  "cite_one_number",
+  "specific_time_cta",
 ] as const;
 export type FragmentId = (typeof FRAGMENT_IDS)[number];
 
@@ -81,6 +87,31 @@ export const FRAGMENTS: readonly Fragment[] = [
     id: "plain_cta",
     title: "Plain call to action",
     text: "End with one short question asking for a 15-minute call.",
+  },
+  {
+    id: "specific_opener",
+    title: "Specific opener",
+    text: "Open with a concrete fact about them, never a pleasantry.",
+  },
+  {
+    id: "personal_subject",
+    title: "Personal subject line",
+    text: "Put the account's name in the subject line.",
+  },
+  {
+    id: "sector_fit",
+    title: "Sector fit",
+    text: "Tie one product to their sector in one sentence.",
+  },
+  {
+    id: "cite_one_number",
+    title: "Cite one number",
+    text: "State one exact number from their record (employees, revenue or founding year), written exactly as it appears.",
+  },
+  {
+    id: "specific_time_cta",
+    title: "Specific-time call to action",
+    text: "Propose a specific day and time for a 15-minute call.",
   },
 ];
 
