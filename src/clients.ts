@@ -30,3 +30,8 @@ export const model = env.OPENROUTER_MODEL || "openrouter/auto";
 export const voyage: VoyageAIClient = env.VOYAGE_API_KEY
   ? new VoyageAIClient({ apiKey: env.VOYAGE_API_KEY })
   : missing<VoyageAIClient>("VOYAGE_API_KEY");
+
+// Waypoints MCP server database (separate from MONGODB_DB on purpose).
+export const waypointsDb = env.MONGODB_URI
+  ? mongo.db(env.WAYPOINTS_DB || "waypoints")
+  : missing<ReturnType<MongoClient["db"]>>("MONGODB_URI");
