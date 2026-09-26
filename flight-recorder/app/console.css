@@ -421,3 +421,8 @@ main.console.playbook { height: calc(100vh - 58px); overflow: auto; display: blo
 .barbig em, .barfacts em { font-style: normal; color: var(--soft); font-family: var(--mono); font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; margin-right: 6px; }
 .barfacts { display: flex; flex-direction: column; gap: 3px; font-size: 15px; color: var(--body); border-top: 1px solid var(--line); padding-top: 6px; }
 .barfacts a { color: var(--brand); }
+
+/* Scroll fixes (16:48): side column gets bottom room so the last panel scrolls fully into view;
+   replay isn't locked to one viewport height and clears the fixed scrubber. */
+.side { padding-bottom: 96px; }
+main.console.replaying { height: auto; min-height: calc(100vh - 58px); overflow: visible; padding-bottom: 180px; }
