@@ -101,7 +101,7 @@ try {
   check(obj.end_state?.bearing === "tests passing" && obj.end_state?.target === 10, `end_state defaulted: ${JSON.stringify(obj.end_state)}`);
 
   const s1 = await agent("get_settings", {});
-  check(s1.version === 1 && s1.fragments.length === 2, `get_settings v${s1.version} fragments ${s1.fragments.map((f: any) => f.id)}`);
+  check(s1.version === 1 && s1.fragments.length === 1, `get_settings v${s1.version} fragments ${s1.fragments.map((f: any) => f.id)}`);
 
   await agent("log_failure", {
     objective_id: oid,

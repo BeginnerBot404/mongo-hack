@@ -77,8 +77,8 @@ export interface HarnessSettings {
 }
 
 export const SEED_SETTINGS: HarnessSettings = {
-  prompt_fragments: ["checkpoint_every_test", "read_policies_first"],
+  prompt_fragments: ["read_policies_first"], // lean: the sentinel adds fragments when the harness misbehaves
   required_tools: ["checkpoint"],
   sentinel_threshold: 0.25, // a lone regression (trend weight 0.3) must tap; similarity + recurrence raise it further
-  model: "anthropic/claude-sonnet-5", // GLM skipped checkpoints in rehearsal
+  model: "z-ai/glm-5.3-flash", // its skipped checkpoints / corrupt writes are sentinel input, not a reason to switch
 };

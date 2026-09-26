@@ -13,6 +13,15 @@ export const JEV_MODEL = "typesafe/jev-router";
 
 type Action = "recall" | "rollback" | "adjust_settings" | "handoff" | "delegate" | "adapt";
 
+/** Deterministic failure class → prompt fragment the surgeon enables (classes are stored lowercase-kebab). */
+export const FIX_FOR: Record<string, string> = {
+  regression: "verify_whole_suite",
+  "skipped-checkpoint": "checkpoint_every_test",
+  "corrupt-write": "one_change_per_edit",
+};
+/** Harness-detected protocol violations always score full trend (the harness logs them from code, never the model). */
+const PROTOCOL_CLASSES = new Set(["skipped-checkpoint", "corrupt-write"]);
+
 function say(line: string) {
   console.log(`[sentinel ${new Date().toISOString().slice(11, 19)}] ${line}`);
 }
@@ -117,6 +126,7 @@ async function similarity(failure: Document): Promise<{ score: number; nearest: 
 /** regression = 1, stall (tracked bearing flat for 3 checkpoints) = 0.6, else 0. */
 async function trendOf(objectiveId: ObjectId, failureClass?: string): Promise<{ score: number; label: string }> {
   if (failureClass === "regression") return { score: 1, label: "regression" };
+  if (failureClass && PROTOCOL_CLASSES.has(failureClass)) return { score: 1, label: "protocol" };
   const objective = await db.collection("objectives").findOne({ _id: objectiveId });
   if (!objective) return { score: 0, label: "none" };
   const name = trackedBearingName(objective);
@@ -175,6 +185,8 @@ export class Sentinel {
   private stream: ChangeStream | null = null;
   private queue: Promise<void> = Promise.resolve();
   private stopped = false;
+  /** One probation at a time: a fragment change that arrives during probation waits here until the verdict. */
+  private queued: { objectiveId: ObjectId; fragment: string; watch_class: string; tapId: ObjectId; risk: number } | null = null;
   constructor(private client: Client) {}
 
   static async create(): Promise<Sentinel> {
@@ -212,6 +224,23 @@ export class Sentinel {
   private async evaluate(objectiveId: ObjectId, why: string) {
     const r = await surgeon(this.client, "evaluate_probation", { objective_id: objectiveId.toHexString() });
     if (r.evaluated) say(`probation v${r.version} → ${r.verdict.toUpperCase()} (${r.why}) [${why}]`);
+    if (r.evaluated && this.queued) {
+      const q = this.queued;
+      this.queued = null;
+      const config = await currentConfig();
+      if (config.settings.prompt_fragments.includes(q.fragment as never)) return;
+      const a = await surgeon(this.client, "apply_settings_change", {
+        objective_id: q.objectiveId.toHexString(),
+        field: "prompt_fragments",
+        value: [...config.settings.prompt_fragments, q.fragment],
+        reason: { kind: "tap", id: q.tapId.toHexString(), summary: `${q.watch_class} (risk ${q.risk.toFixed(2)}, queued): enable ${q.fragment}` },
+        watch_class: q.watch_class,
+      });
+      if (a.applied) {
+        await db.collection("taps").updateOne({ _id: q.tapId }, { $set: { settings_version_after: a.version, "decision.action": "adjust_settings", status: "open" } });
+        say(`queued change applied: +${q.fragment} → v${a.version} (probation)`);
+      } else say(`queued change +${q.fragment} refused: ${a.gate?.why}`);
+    }
   }
 
   async onCheckpoint(cp: Document) {
@@ -294,20 +323,26 @@ export class Sentinel {
       let action: Action = "recall";
       let versionAfter: number | null = null;
       let detail = "";
-      if (trend.label === "regression" && !config.settings.prompt_fragments.includes("verify_whole_suite")) {
-        const r = await surgeon(this.client, "apply_settings_change", {
-          objective_id: objectiveId.toHexString(),
-          field: "prompt_fragments",
-          value: [...config.settings.prompt_fragments, "verify_whole_suite"],
-          reason: { kind: "tap", id: tapId.toHexString(), summary: `Regression (risk ${risk.toFixed(2)}): verify the whole suite after each fix` },
-          watch_class: failure.class,
-        });
-        if (r.applied) {
-          action = "adjust_settings";
-          versionAfter = r.version;
-          detail = ` (v${r.version}, probation)`;
+      const fragment = FIX_FOR[failure.class] ?? (trend.label === "regression" ? FIX_FOR.regression! : null);
+      if (fragment && !config.settings.prompt_fragments.includes(fragment as never)) {
+        if (config.status === "probation") {
+          if (!this.queued) this.queued = { objectiveId, fragment, watch_class: failure.class, tapId, risk };
+          detail = ` (+${fragment} queued: v${config.version} is on probation, one change at a time)`;
         } else {
-          detail = ` (settings gate refused: ${r.gate?.why})`;
+          const r = await surgeon(this.client, "apply_settings_change", {
+            objective_id: objectiveId.toHexString(),
+            field: "prompt_fragments",
+            value: [...config.settings.prompt_fragments, fragment],
+            reason: { kind: "tap", id: tapId.toHexString(), summary: `${failure.class} (risk ${risk.toFixed(2)}): enable ${fragment}` },
+            watch_class: failure.class,
+          });
+          if (r.applied) {
+            action = "adjust_settings";
+            versionAfter = r.version;
+            detail = ` (+${fragment} → v${r.version}, probation)`;
+          } else {
+            detail = ` (settings gate refused: ${r.gate?.why})`;
+          }
         }
       }
       if (action === "recall" && count >= 2) {
@@ -327,7 +362,7 @@ export class Sentinel {
         action,
         settings_version_after: versionAfter,
         tap: true,
-        hint: sim.nearest ? `Similar earlier failure: ${String(sim.nearest.text).split("\n")[0]}` : null,
+        hint: detail.includes("queued") ? detail.trim() : sim.nearest ? `Similar earlier failure: ${String(sim.nearest.text).split("\n")[0]}` : null,
         similarity_method: sim.method,
       });
       const jev = advisor ? ` [jev: tap=${advisor.tap} ${advisor.action} p=${advisor.probability}]` : "";
@@ -336,8 +371,9 @@ export class Sentinel {
       );
     }
 
-    // A regression failure may decide a pending probation (the checkpoint handler deferred it).
-    if (failure.class === "regression") await this.evaluate(objectiveId, `after ${label}`);
+    // A regression failure may decide a pending probation that watches regressions (the checkpoint handler deferred
+    // it). A probation watching another class is judged at the next non-dropping checkpoint instead.
+    if (failure.class === "regression" && (await currentConfig()).probation?.watch_class === "regression") await this.evaluate(objectiveId, `after ${label}`);
   }
 
   private async writeTap(t: {

@@ -120,7 +120,7 @@ export async function currentConfig(): Promise<HarnessConfig> {
 
 export async function getSettings() {
   const c = await currentConfig();
-  return { version: c.version, status: c.status, settings: c.settings, fragments: getFragments(c.settings.prompt_fragments) };
+  return { version: c.version, status: c.status, settings: c.settings, fragments: getFragments(c.settings.prompt_fragments), outcome: c.outcome };
 }
 
 async function writeEvent(objectiveId: ObjectId | null, kind: string, agent: string, detail: Document, text: string, session?: any) {
@@ -344,9 +344,15 @@ export async function evaluateProbation(input: { objective_id: string; agent: st
     .countDocuments({ objective_id: objectiveId, class: p.watch_class, created_at: { $gt: current.created_at } });
   const bearingOk = p.baseline_bearing === null || (latest !== null && latest >= p.baseline_bearing);
   const kept = bearingOk && recurred === 0;
+  // Before/after on the watched class: parent version's window vs this version's, counted in checkpoints.
+  const [before, cpBefore] = await Promise.all([
+    db.collection("failures").countDocuments({ objective_id: objectiveId, class: p.watch_class, created_at: { $lte: current.created_at } }),
+    db.collection("checkpoints").countDocuments({ objective_id: objectiveId, seq: { $lte: p.started_seq } }),
+  ]);
+  const delta = `v${current.parent_version}: ${before} ${p.watch_class} in ${cpBefore} checkpoints → v${current.version}: ${recurred} in ${since.length}`;
   const why = kept
-    ? `bearing ${latest} ≥ baseline ${p.baseline_bearing} and no ${p.watch_class} in ${since.length} checkpoints`
-    : [
+    ? `${delta}; bearing ${latest} ≥ baseline ${p.baseline_bearing}`
+    : [delta,
         !bearingOk ? `bearing ${latest} < baseline ${p.baseline_bearing}` : "",
         recurred ? `${p.watch_class} recurred ${recurred}x` : "",
       ]
