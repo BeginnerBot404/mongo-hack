@@ -38,7 +38,10 @@
     "demo:hermes": "bash demo/hermes/run.sh",
     "sentinel": "bun run src/sentinel.ts",
     "server:surgeon": "bun run src/server.ts --role surgeon",
-    "smoke:v2": "bun run scripts/smoke-v2.ts"
+    "smoke:v2": "bun run scripts/smoke-v2.ts",
+    "load:sales": "bun run scripts/load-sales.ts",
+    "sales:ceiling": "bun run scripts/sales-ceiling.ts",
+    "sales:smoke": "bun run scripts/sales-smoke.ts"
   },
   "engines": {
     "bun": ">=1.4"
