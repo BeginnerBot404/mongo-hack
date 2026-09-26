@@ -390,8 +390,10 @@ function Route({ s, primary, target, unit, down }: { s: State; primary?: string;
   const pts = cps.map((c, i) => ({ c, i, v: bearingOf(c, primary).current ?? yMin, ver: versionAt(s.harness_config, t(c.created_at)) }));
   const resumedAfter = new Set(s.resumes.filter((r) => r.from_checkpoint_seq != null).map((r) => r.from_checkpoint_seq));
   const bends: { i: number; c: Doc }[] = [];
+  const since = t(s.objective?.created_at);
   for (const cfg of s.harness_config) {
     if (cfg.version === 1 && cfg.created_by === "seed") continue;
+    if (t(cfg.created_at) < since) continue; // only route changes made during this objective
     const i = pts.findIndex((p) => t(p.c.created_at) >= t(cfg.created_at));
     bends.push({ i: i < 0 ? pts.length : i, c: cfg });
   }
@@ -677,7 +679,7 @@ export default function Page() {
     let low: number | null = null;
     for (let i = 1; i < vals.length; i++) if (worse(vals[i - 1], vals[i], down)) low = vals[i];
     const nowTests = vals.length ? vals[vals.length - 1] : (o?.bearings?.[0]?.current ?? null);
-    const verdictCfg = [...cfgs].reverse().find((c) => c.outcome?.why);
+    const verdictCfg = [...cfgs].reverse().find((c) => c.outcome?.why && t(c.outcome.decided_at) >= t(o?.created_at));
     return { beforeV, afterV, skipsBy, regBy, overBy, cpsBy, low, first: vals[0] ?? null, nowTests, why: verdictCfg ? `v${verdictCfg.version} ${verdictCfg.outcome.verdict === "kept" ? "kept" : "rolled back"}: ${one(verdictCfg.outcome.why)}` : null };
   }, [s, primary, o]);
 
