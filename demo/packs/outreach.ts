@@ -14,6 +14,8 @@ import { resolve } from "node:path";
 import * as T from "../../src/outreach/tools";
 import { queueSize } from "../../src/outreach/data";
 import { configs } from "../../src/settings";
+import { waypointsDb as wdb } from "../../src/clients";
+import { ObjectId } from "mongodb";
 import { bold, clip, cyan, dim, green, log, magenta, red, yellow, parse, textOf } from "../term";
 
 const AGENT = "waypoints-harness";
@@ -25,7 +27,7 @@ const DEFAULT_CONTEXT = ["account_name", "product_catalog"];
 const OPTIONAL_TOOLS = ["outline_email", "precheck_email", "lookup_account"] as const;
 const MAX_TURNS_PER_ATTEMPT = 5;
 
-export type OutreachOpts = { fresh: boolean; maxSteps: number; dieAfter: number; dieAfterCheckpoint: number; workers: number };
+export type OutreachOpts = { fresh: boolean; maxSteps: number; dieAfter: number; dieAfterCheckpoint: number; workers: number; continuous: boolean };
 
 type Shape = {
   version: number;
@@ -95,9 +97,12 @@ export async function runOutreach(o: OutreachOpts): Promise<void> {
   // ---------- objective ----------
   log(bold(cyan(`\n▶ waypoints harness · task=outreach · agent=${AGENT} · ${o.fresh ? "fresh objective" : "resume"} · queue ${QUEUE}`)));
   let objectiveId: string | null = null;
-  if (o.fresh) {
+  let batch = 1, campaign = 1;
+  const campaignName = (c: number) => (c === 1 ? "first touch" : c === 2 ? "re-engagement" : `campaign ${c}`);
+  async function openObjective(b: number, c: number): Promise<string> {
+    const title = b === 1 && c === 1 ? OBJECTIVE : `Outbound batch ${b} (campaign ${c}: ${campaignName(c)}). ${OBJECTIVE}`;
     const so = await call("set_objective", {
-      objective: `${TAG} ${OBJECTIVE}`,
+      objective: `${TAG} ${title}`,
       task: "outreach",
       bearings: [
         { name: "qa_pass_rate", target: T_PASS, unit: "%", current: 0 },
@@ -113,14 +118,21 @@ export async function runOutreach(o: OutreachOpts): Promise<void> {
       agent: AGENT,
     });
     if (so.error) throw new Error(`set_objective: ${so.error}`);
-    objectiveId = String(so.objective_id);
-    log(`${magenta("→ set_objective".padEnd(15))} ${clip(OBJECTIVE, 90)}  ${dim(objectiveId)}`);
+    const id = String(so.objective_id);
+    await wdb.collection("objectives").updateOne({ _id: new ObjectId(id) }, { $set: { batch: b, campaign: campaignName(c), campaign_no: c } });
+    log(`${magenta("→ set_objective".padEnd(15))} ${clip(title, 90)}  ${dim(id)}`);
+    return id;
   }
+  if (o.fresh) objectiveId = await openObjective(batch, campaign);
   const resumed = await call("resume", { ...(objectiveId ? { objective_id: objectiveId } : {}), agent: AGENT });
   if (resumed.error) throw new Error(`resume: ${resumed.error} (run with --fresh to start an objective)`);
   objectiveId = String(resumed.objective_id);
   const objText = String(resumed.objective?.objective ?? resumed.objective ?? "");
   if (!objText.includes(TAG)) throw new Error(`latest objective is not an outreach objective ("${clip(objText, 60)}"): run with --fresh`);
+  {
+    const od: any = await wdb.collection("objectives").findOne({ _id: new ObjectId(objectiveId) }, { projection: { batch: 1, campaign_no: 1 } });
+    batch = od?.batch ?? 1; campaign = od?.campaign_no ?? 1;
+  }
   log(bold(`◎ END STATE every account done AND first-try pass rate ≥ ${T_PASS}% — immutable`));
 
   // ---------- settings -> harness shape ----------
@@ -191,6 +203,7 @@ export async function runOutreach(o: OutreachOpts): Promise<void> {
         const r: any = await T.submit_email({ objective_id: objectiveId!, ...d, agent: AGENT, worker: w.tag, settings_version: shape!.version } as any);
         if (r.refused) return JSON.stringify({ refused: true, error: r.why });
         w.lastSubmit = { ...r, subject: d.subject, body: d.body };
+        if (r.draft_id) await wdb.collection("drafts").updateOne({ _id: new ObjectId(r.draft_id) }, { $set: { campaign: campaignName(campaign), batch, worker: w.tag } }).catch(() => {});
         return JSON.stringify({ pass: r.pass, failures: r.failures });
       }, "submit_email", "Submit the final email for this account. It is graded by the QA gate; returns {pass, failures}.", draftSchema),
     };
@@ -254,7 +267,7 @@ export async function runOutreach(o: OutreachOpts): Promise<void> {
       const rollback = /^Rollback of/.test(String(doc?.reason?.summary ?? ""));
       const watch = doc?.probation?.watch_class as string | undefined;
       const tag = watch ? `  [${watch}${failCounts[watch] ? ` ×${failCounts[watch]}` : ""}]` : "";
-      const what = rollback ? `restored v${doc.parent_version}'s settings` : describeChange(doc?.change);
+      const what = rollback ? `rolled back v${doc.parent_version} (${describeChange(doc?.change)})` : describeChange(doc?.change);
       log(cyan(bold(`  ⟳ HARNESS REBUILT v${prev.version} → v${next.version} (${next.status === "probation" ? "trial" : next.status}): ${what}${tag}`)) + dim(`  [${why}]`));
       log(shapeLine(next));
     }
@@ -363,11 +376,15 @@ export async function runOutreach(o: OutreachOpts): Promise<void> {
   async function worker(w: W) {
     while (!stopReason) {
       if (submits >= o.maxSteps) { stopReason ||= `--max-steps ${o.maxSteps}`; break; }
-      if (reached()) { stopReason ||= "end state"; break; }
+      if (reached() && !o.continuous) { stopReason ||= "end state"; break; }
       // All workers share one settings object: pick up a new version before every account.
       await serial(() => reload("before next account").catch(() => false));
       const na = await T.next_account({ objective_id: objectiveId!, context_sources: shape!.context, worker: w.tag });
-      if (na.done || !na.account) { stopReason ||= "queue empty"; break; }
+      if (na.done || !na.account) {
+        if (!o.continuous) { stopReason ||= "queue empty"; break; }
+        await nextBatch(); // drain: resolves once every worker is idle and the next objective is open
+        continue;
+      }
       const acc = na.account;
       w.current = acc;
       const n = (acc.queue_index ?? 0) + 1;
@@ -402,6 +419,38 @@ export async function runOutreach(o: OutreachOpts): Promise<void> {
       }
       secsPerAccount.push((Date.now() - ta) / 1000);
     }
+  }
+
+  // ---------- --continuous: drain all workers, close this objective, open the next batch on the learned playbook ----------
+  let idle = 0;
+  let barrier: { p: Promise<void>; resolve: () => void } | null = null;
+  async function switchBatch() {
+    await serial(async () => {
+      await checkpoint(`Batch ${batch} finished: ${doneCount()}/${total()} done, first-try pass rate ${pct(firstTryRate())}.`);
+      await wdb.collection("objectives").updateOne({ _id: new ObjectId(objectiveId!) }, { $set: { status: "completed", completed_at: new Date(), final: { done: doneCount(), total: total(), first_try_pass_rate: firstTryRate(), reached: reached() } } });
+      log(bold(`  ■ batch ${batch} closed: ${doneCount()}/${total()} done · first-try ${pct(firstTryRate())}${reached() ? green(" · END STATE REACHED") : ""}`));
+      const nb = await T.loadNextBatch(QUEUE);
+      if (nb.campaign_reset) campaign++;
+      batch++;
+      objectiveId = await openObjective(batch, campaign);
+      await readStats();
+      log(cyan(bold(`\n━━ BATCH ${batch} · ${nb.loaded} accounts · campaign ${campaign} (${campaignName(campaign)}) · starting on playbook v${shape!.version} (learned) ━━`)));
+      log(shapeLine(shape!));
+    });
+  }
+  function nextBatch(): Promise<void> {
+    if (!barrier) {
+      let resolve!: () => void;
+      const p = new Promise<void>((r) => (resolve = r));
+      barrier = { p, resolve };
+    }
+    const b = barrier;
+    idle++;
+    if (idle === Math.max(1, o.workers)) {
+      switchBatch().catch((e) => { log(red(`  batch switch failed: ${e?.message ?? e}`)); stopReason ||= "batch switch failed"; })
+        .finally(() => { idle = 0; barrier = null; b.resolve(); });
+    }
+    return b.p;
   }
 
   const tw = Date.now();

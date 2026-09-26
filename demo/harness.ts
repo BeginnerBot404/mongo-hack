@@ -8,6 +8,7 @@
 //   bun run harness                 # resume the latest objective (sales)
 //   bun run harness --fresh         # new objective
 //   flags: --task outreach|sales|invoice  --max-steps N (outreach: submissions, default 80; sales: proposals, 15; invoice: turns, 40)
+//          --workers N (outreach: concurrent account loops, default 3)  --continuous (outreach: batch after batch, forever)
 //          --die-after N (SIGKILL self after N tool calls)
 //          --die-after-checkpoint N (SIGKILL self on the next tool result after the Nth checkpoint: mid-task, repeatable)
 //   env:   DEMO_MODEL=<openrouter slug>   DEMO_PROVIDER=gb10 (GB10_BASE_URL, GB10_MODEL, GB10_API_KEY)
@@ -146,7 +147,7 @@ async function main() {
   if (!process.env.OPENROUTER_API_KEY && process.env.DEMO_PROVIDER !== "gb10") throw new Error("OPENROUTER_API_KEY is not set (bun loads .env from the repo root)");
   if (TASK === "outreach") {
     const { runOutreach } = await import("./packs/outreach");
-    return runOutreach({ fresh: FRESH, maxSteps: MAX_STEPS, dieAfter: DIE_AFTER, dieAfterCheckpoint: DIE_AFTER_CHECKPOINT, workers: num("--workers", 3) });
+    return runOutreach({ fresh: FRESH, continuous: flag("--continuous"), maxSteps: flag("--continuous") && !argv.includes("--max-steps") ? Infinity : MAX_STEPS, dieAfter: DIE_AFTER, dieAfterCheckpoint: DIE_AFTER_CHECKPOINT, workers: num("--workers", 3) });
   }
   if (TASK !== "sales" && TASK !== "invoice") throw new Error(`--task must be outreach, sales or invoice (got ${TASK})`);
   const t0 = Date.now();

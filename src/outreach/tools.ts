@@ -310,3 +310,23 @@ export async function classRate(
 }
 
 export { sentences, accounts, drafts };
+
+// ---- continuous mode (harness --continuous) ----------------------------------------------------
+
+/**
+ * Next batch for a new objective: finished accounts of the last batch become "contacted" (so queue stats count only
+ * this batch), then the next `size` reserve accounts by queue_index become pending. When no reserve is left, every
+ * account goes back to reserve first (a new campaign over the whole list) and `campaign_reset` is true.
+ */
+export async function loadNextBatch(size = queueSize(), db: Db = waypointsDb): Promise<{ loaded: number; campaign_reset: boolean; reserve_left: number }> {
+  const col = db.collection("accounts");
+  await col.updateMany({ status: { $in: ["done", "failed"] } }, { $set: { status: "contacted" }, $unset: { claimed_by: "", claimed_at: "" } });
+  let campaign_reset = false;
+  if (!(await col.countDocuments({ status: "reserve" }))) {
+    await col.updateMany({ status: { $in: ["contacted", "done", "failed"] } }, { $set: { status: "reserve" } });
+    campaign_reset = true;
+  }
+  const next = await col.find({ status: "reserve" }, { projection: { _id: 1 } }).sort({ queue_index: 1 }).limit(size).toArray();
+  await col.updateMany({ _id: { $in: next.map((d) => d._id) } }, { $set: { status: "pending" } });
+  return { loaded: next.length, campaign_reset, reserve_left: await col.countDocuments({ status: "reserve" }) };
+}
