@@ -1,0 +1,25 @@
+{
+  "name": "mongo-hack",
+  "module": "src/check.ts",
+  "type": "module",
+  "private": true,
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "mongodb": "^7.6.0",
+    "openai": "^7.23.0",
+    "voyageai": "^0.4.0"
+  },
+  "scripts": {
+    "check": "bun run src/check.ts",
+    "typecheck": "tsc --noEmit",
+    "prepare": "git config core.hooksPath .githooks"
+  },
+  "overrides": {
+    "bson": "7.2.0"
+  }
+}
