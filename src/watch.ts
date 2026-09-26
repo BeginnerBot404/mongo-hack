@@ -215,9 +215,11 @@ function eventLine(ev: FeedEvent, width: number): string {
 }
 
 function render(): string {
-  const cols = process.stdout.columns ?? 100;
+  // getWindowSize() re-queries the tty each frame, so multiplexer resizes are picked up even without SIGWINCH.
+  const [liveCols, liveRows] = TTY && typeof process.stdout.getWindowSize === "function" ? process.stdout.getWindowSize() : [];
+  const cols = liveCols || process.stdout.columns || 100;
   const W = Math.max(60, Math.min(110, cols));
-  const rows = process.stdout.rows ?? 40;
+  const rows = liveRows || process.stdout.rows || 40;
   const L: string[] = [];
   const rule = (label = "") => dim(label ? `── ${label} ${"─".repeat(Math.max(0, W - label.length - 4))}` : "─".repeat(W));
 
@@ -305,9 +307,13 @@ function render(): string {
 
 // ---------- output ----------
 let lastFrame = "";
+let lastSize = "";
 function draw() {
   const frame = render();
   if (TTY) {
+    const size = typeof process.stdout.getWindowSize === "function" ? process.stdout.getWindowSize().join("x") : "";
+    if (size !== lastSize) process.stdout.write("\x1b[2J"); // clear stale wrapped lines after a resize
+    lastSize = size;
     process.stdout.write("\x1b[H" + frame.split("\n").join("\x1b[K\n") + "\x1b[K\x1b[J");
   } else if (frame !== lastFrame) {
     // Non-TTY (piped to a log): append whole frames when they change.
