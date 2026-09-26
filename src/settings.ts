@@ -273,11 +273,14 @@ async function rollbackTo(current: HarnessConfig, why: string, session: any) {
   const parent = await configs().findOne({ version: current.parent_version! }, { session });
   if (!parent) throw new Error(`parent v${current.parent_version} not found`);
   const now = new Date();
-  await configs().updateOne(
-    { _id: current._id },
+  // Only a version still on probation can be rolled back. Two concurrent evaluations of the same version
+  // (the sentinel handles checkpoints concurrently) must not both roll it back; the loser aborts its transaction.
+  const marked = await configs().updateOne(
+    { _id: current._id, status: "probation" },
     { $set: { status: "rolled_back", outcome: { decided_at: now, verdict: "rolled_back", why } } },
     { session },
   );
+  if (marked.matchedCount === 0) throw new Error(`v${current.version} is no longer on probation; already decided`);
   const restored: HarnessConfig = {
     _id: new ObjectId(),
     version: (await configs().find({}, { session }).sort({ version: -1 }).limit(1).next())!.version + 1,
@@ -364,11 +367,12 @@ export async function evaluateProbation(input: { objective_id: string; agent: st
   try {
     await session.withTransaction(async () => {
       if (kept) {
-        await configs().updateOne(
-          { _id: current._id },
+        const marked = await configs().updateOne(
+          { _id: current._id, status: "probation" },
           { $set: { status: "kept", outcome: { decided_at: new Date(), verdict: "kept", why } } },
           { session },
         );
+        if (marked.matchedCount === 0) throw new Error(`v${current.version} is no longer on probation; already decided`);
       } else {
         restored = await rollbackTo(current, why, session);
       }
@@ -390,6 +394,12 @@ export async function evaluateProbation(input: { objective_id: string; agent: st
         session,
       );
     });
+  } catch (err) {
+    // Another evaluation decided this version first: not an error, just nothing left to do.
+    if (err instanceof Error && err.message.includes("already decided")) {
+      return { evaluated: false, version: current.version, why: err.message };
+    }
+    throw err;
   } finally {
     await session.endSession();
   }
