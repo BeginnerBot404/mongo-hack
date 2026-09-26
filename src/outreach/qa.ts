@@ -59,7 +59,7 @@ export function extractNumbers(text: string): FoundNumber[] {
     const unit = (m[3] ?? "").toLowerCase();
     const percent = unit === "%" || unit === "percent";
     const value = percent ? bare : bare * (SCALE[unit] ?? 1);
-    const year = !m[1] && !unit && /^(19|20)\d\d$/.test(m[2]!);
+    const year = !m[1] && !unit && /^(19|20)\d\d$/.test(m[2]!.replace(/,+$/, ""));
     out.push({ raw: m[0].trim(), value, bare, percent, year });
   }
   return out;
@@ -71,7 +71,9 @@ const near = (a: number, b: number) => b !== 0 && Math.abs(a - b) / Math.abs(b) 
 function numberMatches(n: FoundNumber, acc: QaAccount): boolean {
   if (n.percent) return false; // the record has no percentages
   if (n.year) return n.bare === acc.year_established;
-  const candidates = [acc.revenue_musd, acc.revenue_musd * 1e6, acc.employees, acc.year_established, ...PRODUCTS.map((p) => p.sales_price)];
+  // Years are matched exactly above; never let a year-like number pass on the 1% tolerance.
+  if (/^(19|20)\d\d$/.test(String(n.bare)) && !n.raw.startsWith("$")) return n.bare === acc.year_established || n.bare === acc.employees;
+  const candidates = [acc.revenue_musd, acc.revenue_musd * 1e6, acc.employees, ...PRODUCTS.map((p) => p.sales_price)];
   return candidates.some((c) => near(n.value, c) || near(n.bare, c));
 }
 
