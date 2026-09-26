@@ -26,7 +26,10 @@
     "prepare": "git config core.hooksPath .githooks",
     "server": "bun run src/server.ts",
     "setup": "bun run scripts/setup-indexes.ts",
-    "smoke": "bun run scripts/smoke.ts"
+    "smoke": "bun run scripts/smoke.ts",
+    "demo:langgraph": "bun run demo/langgraph-agent.ts",
+    "demo:reset": "bash demo/reset.sh",
+    "demo:hermes": "bash demo/hermes/run.sh"
   },
   "engines": {
     "bun": ">=1.4"
