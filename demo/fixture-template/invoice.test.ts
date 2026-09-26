@@ -5,12 +5,11 @@ import {
   formatUSD,
   hoursFromMinutes,
   invoiceTotal,
-  lastPage,
-  pageLabel,
   paginate,
   taxCents,
   totalHours,
 } from "./invoice.ts";
+import { lastPage, pageLabel } from "./statement.ts";
 
 describe("dates", () => {
   test("billableDays counts both the first and last day", () => {

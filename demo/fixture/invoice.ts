@@ -54,7 +54,7 @@ export function formatUSD(cents: number): string {
 }
 
 /** Offset of the first item on a 1-indexed page. */
-function pageStart(page: number, size: number): number {
+export function pageStart(page: number, size: number): number {
   return page * size;
 }
 
@@ -62,17 +62,4 @@ function pageStart(page: number, size: number): number {
 export function paginate<T>(items: T[], page: number, size: number): T[] {
   const start = pageStart(page, size);
   return items.slice(start, start + size);
-}
-
-/** The final (possibly partial) page of invoice lines. */
-export function lastPage<T>(items: T[], size: number): T[] {
-  const last = Math.floor((items.length - 1) / size);
-  return items.slice(pageStart(last, size));
-}
-
-/** Footer label for a 1-indexed page, e.g. "Showing 3-4 of 5". */
-export function pageLabel(page: number, size: number, total: number): string {
-  const from = pageStart(page - 1, size) + 1;
-  const to = Math.min(from + size - 1, total);
-  return `Showing ${from}-${to} of ${total}`;
 }

@@ -93,7 +93,14 @@ export async function runTests(): Promise<TestReport> {
   return { pass, fail, total: pass + fail, all_green: fail === 0 && pass > 0, failures };
 }
 
-const runTestsTool = tool(async () => JSON.stringify(await runTests()), {
+// The last test report, and whether a checkpoint is owed for it (required_tools enforcement).
+let lastReport: TestReport | null = null;
+let checkpointOwed = false;
+const runTestsTool = tool(async () => {
+  lastReport = await runTests();
+  checkpointOwed = true;
+  return JSON.stringify(lastReport);
+}, {
   name: "run_tests",
   description: "Run `bun test` in demo/fixture. Returns JSON {pass, fail, total, all_green, failures:[{test, detail}]}.",
   schema: z.object({}),
@@ -108,14 +115,14 @@ const readFileTool = tool(async ({ path }) => await Bun.file(scoped(path)).text(
 const writeFileTool = tool(
   async ({ path, content }) => {
     const abs = scoped(path);
-    if (/\.test\.ts$/.test(abs)) throw new Error("test files are read-only: fix invoice.ts instead");
+    if (relative(FIXTURE, abs) !== "invoice.ts") throw new Error("only invoice.ts is writable: fix bugs in invoice.ts");
     await mkdir(dirname(abs), { recursive: true });
     await Bun.write(abs, content);
     return `wrote ${relative(FIXTURE, abs)} (${content.length} bytes)`;
   },
   {
     name: "write_file",
-    description: "Overwrite a file inside demo/fixture with the FULL new content. Test files are read-only.",
+    description: "Overwrite demo/fixture/invoice.ts with the FULL new content. Every other file is read-only.",
     schema: z.object({ path: z.string().describe("path relative to demo/fixture"), content: z.string() }),
   },
 );
@@ -192,7 +199,7 @@ function textOf(r: unknown): string {
 const parse = (s: string): any => { try { return JSON.parse(s); } catch { return { error: s }; } };
 
 // ---------- settings (harness_config) ----------
-type Settings = { version: number; status: string; model: string | null; fragments: Fragment[]; ids: string[]; local: boolean };
+type Settings = { version: number; status: string; model: string | null; fragments: Fragment[]; ids: string[]; required: string[]; local: boolean };
 
 const BASE_PROMPT = (task: string) =>
   `You are the "${AGENT}" coding agent. You work through tools only; be terse between tool calls.\n` +
@@ -271,12 +278,12 @@ async function main() {
   async function loadSettings(): Promise<Settings> {
     if (!has("get_settings")) {
       const ids = [...SEED_SETTINGS.prompt_fragments];
-      return { version: 1, status: "seed (local)", model: SEED_SETTINGS.model, fragments: getFragments(ids), ids, local: true };
+      return { version: 1, status: "seed (local)", model: SEED_SETTINGS.model, fragments: getFragments(ids), ids, required: [...SEED_SETTINGS.required_tools], local: true };
     }
     const j = await call("get_settings", {});
     if (j.error) throw new Error(`get_settings: ${j.error}`);
     const fragments: Fragment[] = j.fragments ?? [];
-    return { version: j.version, status: j.status, model: j.settings?.model ?? null, fragments, ids: j.settings?.prompt_fragments ?? fragments.map((f) => f.id), local: false };
+    return { version: j.version, status: j.status, model: j.settings?.model ?? null, fragments, ids: j.settings?.prompt_fragments ?? fragments.map((f) => f.id), required: j.settings?.required_tools ?? [], local: false };
   }
 
   const task = await Bun.file(join(REPO, "demo", "task.md")).text();
@@ -350,10 +357,13 @@ async function main() {
   let objectiveId: string | null = null;
   let lastBearing: number | null = null;
   let checkpointsAfterTests = 0, testRuns = 0, skipped = 0, awaitingCheckpoint = false;
+  let doCheckpoint: (args: any) => Promise<string> = async () => "{}";
+  let enforced = 0;
+  let carryNotes: string[] = [];
   const wrapped = mcpTools.map((t) => {
     if (t.name !== "checkpoint") return t;
-    return tool(
-      async (args: any) => {
+    doCheckpoint = async (args: any) => {
+        checkpointOwed = false;
         const raw = textOf(await t.invoke(args));
         const j = parse(raw);
         if (j.error) return raw;
@@ -379,9 +389,8 @@ async function main() {
           }
         }
         return notes.length ? JSON.stringify({ ...j, harness_notes: notes }) : raw;
-      },
-      { name: t.name, description: t.description, schema: t.schema as any },
-    ) as unknown as StructuredToolInterface;
+    };
+    return tool(doCheckpoint, { name: t.name, description: t.description, schema: t.schema as any }) as unknown as StructuredToolInterface;
   });
   tools = [...wrapped, ...localTools];
 
@@ -416,7 +425,30 @@ async function main() {
 
   let toolCalls = 0, turn = 0;
   const graph = new StateGraph(MessagesAnnotation)
-    .addNode("agent", async (s) => ({ messages: [await model.llm.invoke([system, ...s.messages])] }))
+    .addNode("agent", async (s) => {
+      const extra = carryNotes.length ? [new HumanMessage(`Harness notes: ${carryNotes.join(" ")}`)] : [];
+      carryNotes = [];
+      const msg = await model.llm.invoke([system, ...s.messages, ...extra]);
+      // required_tools: checkpoint -> if the model moves on from a test run without checkpointing, the harness does it.
+      const next = msg.tool_calls?.[0]?.name;
+      if (checkpointOwed && next !== "checkpoint" && lastReport && settings?.required.includes("checkpoint")) {
+        enforced++;
+        const r = lastReport;
+        log(yellow(bold(`  ⛨ harness checkpoint (required_tools: checkpoint; model went to ${next ?? "stop"}) tests_passing=${r.pass}`)));
+        const raw = await doCheckpoint({
+          objective_id: objectiveId,
+          state_summary: `Harness auto-checkpoint after a test run: ${r.pass}/${r.total} passing (model skipped checkpoint).`,
+          open_threads: r.failures.map((f) => f.test),
+          next_action: r.all_green ? "Objective complete." : `Fix: ${r.failures[0]?.test ?? "remaining failures"}`,
+          bearings_current: [{ name: "tests_passing", current: r.pass }],
+          agent: AGENT,
+        });
+        const j = parse(raw);
+        log(`  ${dim("↳")} ${resultSummary("checkpoint", raw)}`);
+        if (Array.isArray(j.harness_notes)) carryNotes.push(...j.harness_notes);
+      }
+      return { messages: [msg] };
+    })
     .addNode("tools", new ToolNode(tools))
     .addEdge(START, "agent")
     .addConditionalEdges("agent", toolsCondition, ["tools", END])
@@ -441,10 +473,7 @@ async function main() {
               if (rest.trim()) log(dim(`  💭 ${clip(rest, 140)}`));
             }
             for (const tc of msg.tool_calls ?? []) {
-              if (awaitingCheckpoint && tc.name !== "checkpoint") {
-                skipped++;
-                log(red(`  ⚠ no checkpoint after the last test run (next call: ${tc.name})`));
-              }
+              if (awaitingCheckpoint && tc.name !== "checkpoint") skipped++;
               if (tc.name === "checkpoint" && awaitingCheckpoint) checkpointsAfterTests++;
               awaitingCheckpoint = false;
               pending.set(tc.id ?? "", { name: tc.name });
@@ -477,7 +506,7 @@ async function main() {
     await mcp.close().catch(() => {});
   }
   if (awaitingCheckpoint) skipped++;
-  log(dim(`\n  checkpoint discipline: ${checkpointsAfterTests}/${testRuns} test runs followed by a checkpoint${skipped ? `, ${skipped} skipped` : ""}`));
+  log(dim(`\n  checkpoint discipline: ${checkpointsAfterTests}/${testRuns} test runs followed by a model checkpoint${skipped ? `, ${skipped} skipped` : ""}${enforced ? `, ${enforced} enforced by the harness` : ""}`));
   log(green_ ? green(bold(`■ done: all tests green after ${toolCalls} tool calls`)) : yellow(`■ finished after ${toolCalls} tool calls (tests not all green)`));
   process.exit(green_ ? 0 : 1);
 }
