@@ -22,4 +22,4 @@ Models: `anthropic/claude-sonnet-5` with fallback `openai/gpt-5.5` (pinned; GLM 
 - `DEMO_MODEL=z-ai/glm-5.3-flash`: use GLM, with a Sonnet fallback.
 - `DEMO_PROVIDER=gb10`: use `GB10_BASE_URL`, `GB10_MODEL` and `GB10_API_KEY`.
 - `WAYPOINTS_DEBUG=1`: show the server's stderr.
-- `TAP_WAIT_MS`: after a drop, how long to wait for the sentinel (default 15000).
+- `TAP_WAIT_MS`: after a drop, how long to wait for the sentinel (default 30000).

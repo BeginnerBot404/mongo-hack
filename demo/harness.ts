@@ -28,7 +28,7 @@ const GLM = "z-ai/glm-5.3-flash";
 const DEFAULT_MODEL = "anthropic/claude-sonnet-5";
 const FALLBACK_MODEL = "anthropic/claude-sonnet-5";
 const FALLBACK_FOR_SONNET = "openai/gpt-5.5";
-const TAP_WAIT_MS = Number(process.env.TAP_WAIT_MS ?? 15000);
+const TAP_WAIT_MS = Number(process.env.TAP_WAIT_MS ?? 30000);
 
 const OBJECTIVE = {
   objective: "Make every test in demo/fixture/invoice.test.ts pass by fixing bugs in invoice.ts",
@@ -240,7 +240,7 @@ function buildLlm(settingsModel: string | null, tools: StructuredToolInterface[]
   const fb = fallbackFor(id);
   const primary = chat(id, OR, orKey).bindTools(tools);
   const llm = primary.withFallbacks([chat(fb, OR, orKey).bindTools(tools)]) as unknown as Llm;
-  return { llm, label: `${id} → fallback ${fb}${pinned ? ` (pinned; settings say ${GLM}, set DEMO_MODEL=${GLM} to use it)` : ""}` };
+  return { llm, label: `${id} → fallback ${fb}${pinned ? ` (pinned over settings.model ${GLM})` : ""}` };
 }
 
 // ---------- main ----------
@@ -388,10 +388,11 @@ async function main() {
         const dropped = typeof bearing === "number" && lastBearing != null && bearing < lastBearing;
         if (dropped) log(red(bold(`  ▼ BEARING DROP tests_passing ${lastBearing} → ${bearing}`)));
         if (typeof bearing === "number") lastBearing = bearing;
+        const vBefore = settings?.version;
         const notes = await handleServerSignals(j, objectiveId);
         // A drop means the sentinel is likely scoring right now; wait briefly for its settings change so the
         // model's next edit already runs under the new rules (read-only get_settings poll, then one resume for the tap).
-        if (dropped && !j.tap && has("get_settings") && settings && !settings.local) {
+        if (dropped && settings?.version === vBefore && has("get_settings") && settings && !settings.local) {
           log(dim(`  … waiting up to ${TAP_WAIT_MS / 1000}s for the sentinel`));
           const t0 = Date.now();
           while (Date.now() - t0 < TAP_WAIT_MS) {
