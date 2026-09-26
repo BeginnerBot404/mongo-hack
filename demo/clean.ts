@@ -4,7 +4,8 @@
 //   bun run demo:clean   (then restores the fixture via demo/reset.sh)
 import { mongo, waypointsDb as db } from "../src/clients";
 
-const COLLECTIONS = ["objectives", "checkpoints", "decisions", "failures", "memories", "resumes", "policies"];
+// harness_config is wiped too: `bun run setup` re-seeds v1 when it is empty, so every rehearsal starts from v1.
+const COLLECTIONS = ["objectives", "checkpoints", "decisions", "failures", "memories", "resumes", "policies", "taps", "events", "harness_config"];
 
 try {
   const counts: string[] = [];

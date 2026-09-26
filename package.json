@@ -30,7 +30,9 @@
     "watch": "bun run src/watch.ts",
     "demo:layout": "bash layout/herdr.sh",
     "demo:layout:tmux": "bash layout/tmux.sh",
-    "demo:langgraph": "bun run demo/langgraph-agent.ts",
+    "harness": "bun run demo/harness.ts",
+    "harness:fresh": "bash demo/reset.sh && bun run demo/harness.ts --fresh",
+    "demo:langgraph": "bun run demo/harness.ts",
     "demo:reset": "bash demo/reset.sh",
     "demo:clean": "bun run demo/clean.ts && bash demo/reset.sh",
     "demo:hermes": "bash demo/hermes/run.sh"
