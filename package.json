@@ -35,7 +35,10 @@
     "demo:langgraph": "bun run demo/harness.ts",
     "demo:reset": "bash demo/reset.sh",
     "demo:clean": "bun run demo/clean.ts && bash demo/reset.sh",
-    "demo:hermes": "bash demo/hermes/run.sh"
+    "demo:hermes": "bash demo/hermes/run.sh",
+    "sentinel": "bun run src/sentinel.ts",
+    "server:surgeon": "bun run src/server.ts --role surgeon",
+    "smoke:v2": "bun run scripts/smoke-v2.ts"
   },
   "engines": {
     "bun": ">=1.4"

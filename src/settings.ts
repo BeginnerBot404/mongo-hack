@@ -187,7 +187,14 @@ export type Reason = { kind: "failure" | "tap" | "manual_seed"; id?: string | nu
 
 // ---- apply_settings_change ---------------------------------------------------------------------
 
-export async function applySettingsChange(input: { objective_id: string; field: string; value: unknown; reason: Reason; agent: string }) {
+export async function applySettingsChange(input: {
+  objective_id: string;
+  field: string;
+  value: unknown;
+  reason: Reason;
+  watch_class?: string;
+  agent: string;
+}) {
   const objectiveId = new ObjectId(input.objective_id);
   const objective = await db.collection("objectives").findOne({ _id: objectiveId });
   if (!objective) throw new Error(`No objective with id ${input.objective_id}`);
@@ -201,9 +208,11 @@ export async function applySettingsChange(input: { objective_id: string; field: 
   const field = input.field as SettingsField;
   const lastCheckpoint = await db.collection("checkpoints").findOne({ objective_id: objectiveId }, { sort: { seq: -1 } });
   const bearingName = trackedBearingName(objective);
-  let watchClass = "regression";
+  let watchClass = input.watch_class ?? "regression";
   const reasonId = input.reason.id ? new ObjectId(input.reason.id) : null;
-  if (input.reason.kind === "failure" && reasonId) {
+  if (input.watch_class) {
+    // caller named the class to watch
+  } else if (input.reason.kind === "failure" && reasonId) {
     const f = await db.collection("failures").findOne({ _id: reasonId });
     if (f?.class) watchClass = f.class as string;
   } else if (input.reason.kind === "tap" && reasonId) {
