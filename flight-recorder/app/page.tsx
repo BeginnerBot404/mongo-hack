@@ -79,7 +79,7 @@ function bearingOf(cp: Doc | undefined, name?: string): { current: number | null
   return { current: typeof b?.current === "number" ? b.current : null, target: typeof b?.target === "number" ? b.target : null };
 }
 /** Format a bearing value: integers as-is, decimals with 2 places (or 1 if large), % unit appended. */
-export function fmtB(v: number | null | undefined, unit?: string): string {
+function fmtB(v: number | null | undefined, unit?: string): string {
   if (v === null || v === undefined || Number.isNaN(v)) return "?";
   const pctUnit = unit === "%" || unit === "pct" || unit === "percent";
   const s = Number.isInteger(v) ? String(v) : Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 10 ? v.toFixed(1) : Math.abs(v) < 1 ? v.toFixed(3) : v.toFixed(2);
@@ -174,7 +174,7 @@ type Params = { present: boolean; objective: string | null; fixture: boolean; re
 
 // ---------- replay over real Atlas history ----------
 type RunSummary = { id: string; title: string; at: number; startVersion: number | null; endVersion: number | null; first: number | null; last: number | null; unit?: string; cps: number; failures: Record<string, number> };
-export type ReplayInfo = { from: number; to: number; speed: number; done: boolean; runs: RunSummary[] };
+type ReplayInfo = { from: number; to: number; speed: number; done: boolean; runs: RunSummary[] };
 
 function buildReplay(h: Record<string, Doc[]>) {
   const items: { at: number; coll: string; doc: Doc }[] = [];
@@ -202,7 +202,142 @@ function buildReplay(h: Record<string, Doc[]>) {
     const lastAt = cps.length ? t(cps[cps.length - 1].created_at) : t(o.created_at);
     return { id: o._id, title: one(o.objective), at: t(o.created_at), startVersion: versionAt(cfgs, t(o.created_at)), endVersion: versionAt(cfgs, lastAt), first: vals[0] ?? null, last: vals[vals.length - 1] ?? null, unit, cps: cps.length, failures };
   });
-  return { items, runs };
+  // Tick marks for key moments (colour-coded like the banners).
+  const ends = new Map<string, { name?: string; target?: number; down: boolean }>();
+  for (const o of objs) ends.set(o._id, { name: o.end_state?.bearing ?? o.bearings?.[0]?.name, target: o.end_state?.target ?? o.bearings?.[0]?.target, down: lowerBetter(o.end_state?.direction) });
+  const ticks: Tick[] = [];
+  const seenCfg = new Set<string>();
+  items.forEach((it, k) => {
+    const d = it.doc;
+    const add = (kind: string, label: string) => ticks.push({ k, at: it.at, kind, label });
+    if (it.coll === "objectives") add("objective", `new run: ${one(d.objective).slice(0, 60)}`);
+    else if (it.coll === "resumes" && d.from_checkpoint_seq != null) add("resumed", `kill → resume @ checkpoint #${d.from_checkpoint_seq}`);
+    else if (it.coll === "failures" && fclass(d) === "regression") add("regression", `regression: ${one(d.failure).slice(0, 60)}`);
+    else if (it.coll === "failures" && fclass(d) === "overfit_segment") add("regression", "overfit proposal");
+    else if (it.coll === "taps" && d.decision?.tap) add("tap", `sentinel tap ${num(d.risk)} → ${d.decision.action}`);
+    else if (it.coll === "harness_config") {
+      if (!seenCfg.has(d._id)) {
+        seenCfg.add(d._id);
+        if (d.version !== 1 || d.created_by !== "seed") add("settings", `settings v${d.version}: ${diffLabel(d)}`);
+      } else if (d.outcome?.verdict) add(d.outcome.verdict === "kept" ? "kept" : "rolled", `v${d.version} ${d.outcome.verdict === "kept" ? "kept" : "rolled back"}`);
+    } else if (it.coll === "checkpoints") {
+      const e = ends.get(d.objective_id);
+      const v = bearingOf(d, e?.name).current;
+      if (e && typeof e.target === "number" && reached(v, e.target, e.down)) add("kept", `end state reached · checkpoint #${d.seq}`);
+    }
+  });
+  return { items, runs, ticks };
+}
+type Tick = { k: number; at: number; kind: string; label: string };
+type ReplayData = { items: { at: number; coll: string; doc: Doc }[]; runs: RunSummary[]; ticks: Tick[] };
+
+/** State exactly as it was after item k (rebuilt from scratch; no animation through intermediate events). */
+function foldTo(items: ReplayData["items"], k: number): State {
+  let cur: State = { ...EMPTY };
+  for (let i = 0; i <= k && i < items.length; i++) {
+    const it = items[i];
+    if (it.coll === "objectives") cur = { ...EMPTY, harness_config: cur.harness_config, objective: it.doc };
+    else cur = reduce(cur, { coll: it.coll, op: "insert", id: String(it.doc._id), doc: it.doc });
+  }
+  return cur;
+}
+
+function useReplay(data: ReplayData | null, initialSpeed: number) {
+  const [k, setK] = useState(0);
+  const [playing, setPlaying] = useState(true);
+  const [speed, setSpeed] = useState(initialSpeed);
+  const n = data?.items.length ?? 0;
+  useEffect(() => {
+    if (!data || !playing) return;
+    if (k >= n - 1) {
+      setPlaying(false);
+      return;
+    }
+    const gap = Math.min(2500, Math.max(60, (data.items[k + 1].at - data.items[k].at) / speed));
+    const tm = setTimeout(() => setK((x) => Math.min(n - 1, x + 1)), gap);
+    return () => clearTimeout(tm);
+  }, [data, playing, k, n, speed]);
+  useEffect(() => {
+    if (!data) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLElement && ["INPUT", "SELECT", "TEXTAREA"].includes(e.target.tagName) && e.key !== " ") return;
+      if (e.key === " ") {
+        e.preventDefault();
+        setPlaying((p) => !p);
+      } else if (e.key === "ArrowRight") {
+        e.preventDefault();
+        setPlaying(false);
+        setK((x) => Math.min(n - 1, x + 1));
+      } else if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        setPlaying(false);
+        setK((x) => Math.max(0, x - 1));
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [data, n]);
+  const state = useMemo(() => (data ? foldTo(data.items, k) : EMPTY), [data, k]);
+  return { k, setK, playing, setPlaying, speed, setSpeed, state, n };
+}
+
+const TICK_COL: Record<string, string> = { resumed: "#3b82f6", regression: "#f97316", tap: "#d946ef", settings: "#facc15", kept: "#22c55e", rolled: "#e11d48", objective: "#94a3b8" };
+
+function Scrubber({ data, rep }: { data: ReplayData; rep: ReturnType<typeof useReplay> }) {
+  const from = data.items[0]?.at ?? 0;
+  const to = data.items[data.items.length - 1]?.at ?? from + 1;
+  const span = Math.max(1, to - from);
+  const cur = data.items[rep.k]?.at ?? from;
+  const pos = (at: number) => `${((at - from) / span) * 100}%`;
+  const seek = (at: number) => {
+    // last item with at <= target
+    let lo = 0, hi = data.items.length - 1, best = 0;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (data.items[mid].at <= at) {
+        best = mid;
+        lo = mid + 1;
+      } else hi = mid - 1;
+    }
+    rep.setK(best);
+  };
+  return (
+    <div className="scrub">
+      <div className="scrubrow">
+        <button className="sbtn" onClick={() => { rep.setPlaying(false); rep.setK(Math.max(0, rep.k - 1)); }} title="step back (←)">◀︎</button>
+        <button className="sbtn play" onClick={() => rep.setPlaying(!rep.playing)} title="play/pause (space)">{rep.playing ? "❚❚" : "▶︎"}</button>
+        <button className="sbtn" onClick={() => { rep.setPlaying(false); rep.setK(Math.min(rep.n - 1, rep.k + 1)); }} title="step forward (→)">▶︎▏</button>
+        <span className="speeds">
+          {[1, 5, 20, 60].map((x) => (
+            <button key={x} className={`sbtn sp ${rep.speed === x ? "on" : ""}`} onClick={() => rep.setSpeed(x)}>{x}×</button>
+          ))}
+        </span>
+        <span className="stime">{new Date(cur).toTimeString().slice(0, 8)} · event {rep.k + 1}/{rep.n}</span>
+      </div>
+      <div className="track">
+        <div className="trackfill" style={{ width: pos(cur) }} />
+        {data.ticks.map((tk) => (
+          <button
+            key={`${tk.k}-${tk.kind}`}
+            className={`tick t-${tk.kind}`}
+            style={{ left: pos(tk.at), background: TICK_COL[tk.kind] ?? "#fff" }}
+            title={`${new Date(tk.at).toTimeString().slice(0, 8)} · ${tk.label}`}
+            onClick={() => { rep.setPlaying(false); rep.setK(tk.k); }}
+          />
+        ))}
+        <input
+          type="range"
+          className="range"
+          min={from}
+          max={to}
+          step={1}
+          value={cur}
+          onChange={(e) => { rep.setPlaying(false); seek(Number(e.target.value)); }}
+          aria-label="replay time"
+        />
+      </div>
+    </div>
+  );
 }
 
 function useParams() {
@@ -223,7 +358,7 @@ function useParams() {
 }
 
 function useStream(objective: string | null, fx: boolean, ready: boolean, replay?: { speed: number; hours: number; since: string | null }) {
-  const [rp, setRp] = useState<ReplayInfo | null>(null);
+  const [rdata, setRdata] = useState<ReplayData | null>(null);
   const [s, setS] = useState<State>(EMPTY);
   const [status, setStatus] = useState<"connecting" | "live" | "error">("connecting");
   const [loaded, setLoaded] = useState(false);
@@ -232,38 +367,16 @@ function useStream(objective: string | null, fx: boolean, ready: boolean, replay
   useEffect(() => {
     if (!ready) return;
     if (replay) {
-      let timer: ReturnType<typeof setTimeout> | null = null;
       let stop = false;
       (async () => {
         const h = await (await fetch(`/api/history?hours=${replay.hours}${replay.since ? `&since=${encodeURIComponent(replay.since)}` : ""}`, { cache: "no-store" })).json();
         if (stop) return;
-        const { items, runs } = buildReplay(h);
-        const info: ReplayInfo = { from: items[0]?.at ?? 0, to: items[items.length - 1]?.at ?? 0, speed: replay.speed, done: false, runs };
-        setRp(info);
+        setRdata(buildReplay(h));
         setStatus("live");
         setLoaded(true);
-        let cur: State = { ...EMPTY };
-        let i = 0;
-        const step = () => {
-          if (stop) return;
-          const it = items[i++];
-          if (!it) {
-            setRp({ ...info, done: true });
-            return;
-          }
-          if (it.coll === "objectives") cur = { ...EMPTY, harness_config: cur.harness_config, objective: it.doc };
-          else cur = reduce(cur, { coll: it.coll, op: "insert", id: String(it.doc._id), doc: it.doc });
-          setS(cur);
-          setLastEventAt(Date.now());
-          const next = items[i];
-          const gap = next ? Math.min(2500, Math.max(60, (next.at - it.at) / replay.speed)) : 0;
-          timer = setTimeout(step, gap);
-        };
-        step();
       })().catch(() => setStatus("error"));
       return () => {
         stop = true;
-        if (timer) clearTimeout(timer);
       };
     }
     if (fx) {
@@ -297,8 +410,8 @@ function useStream(objective: string | null, fx: boolean, ready: boolean, replay
     es.addEventListener("ping", () => setStatus("live"));
     es.addEventListener("error", () => setStatus("error"));
     return () => es.close();
-  }, [objective, fx, ready, replay?.speed, replay?.hours, replay?.since]);
-  return { s, status, loaded, lastEventAt, fxAlive, rp };
+  }, [objective, fx, ready, replay?.hours, replay?.since]);
+  return { s, status, loaded, lastEventAt, fxAlive, rdata };
 }
 
 function useNow(ms = 500) {
@@ -584,7 +697,13 @@ export default function Page() {
   const [ready, setReady] = useState(false);
   useEffect(() => setReady(true), []);
   const replayOpts = useMemo(() => (params.replay ? { speed: params.speed, hours: params.hours, since: params.since ?? null } : undefined), [params.replay, params.speed, params.hours, params.since]);
-  const { s, status, loaded, lastEventAt, fxAlive, rp } = useStream(params.objective, params.fixture, ready, replayOpts);
+  const { s: liveS, status, loaded, lastEventAt, fxAlive, rdata } = useStream(params.objective, params.fixture, ready, replayOpts);
+  const rep = useReplay(rdata, params.speed);
+  const s = rdata ? rep.state : liveS;
+  const curAt = rdata?.items[rep.k]?.at ?? 0;
+  const rp: ReplayInfo | null = rdata
+    ? { from: rdata.items[0]?.at ?? 0, to: rdata.items[rdata.items.length - 1]?.at ?? 0, speed: rep.speed, done: rep.k >= rep.n - 1 && !rep.playing, runs: rdata.runs }
+    : null;
   const liveAlive = useAlive(ready && !params.fixture && !params.replay);
   const alive = params.fixture ? fxAlive : liveAlive;
   const now = useNow();
@@ -607,7 +726,7 @@ export default function Page() {
   const objKey = useRef<string | null>(null);
   const [queue, setQueue] = useState<{ m: Moment; start: number | null }[]>([]);
   useEffect(() => {
-    if (!loaded) return;
+    if (!loaded || rdata) return;
     const ok = o?._id ?? null;
     if (seen.current === null || objKey.current !== ok) {
       seen.current = new Set(all.map((m) => m.key));
@@ -652,7 +771,9 @@ export default function Page() {
   // After 60s down it's probably a deliberate stop, not the demo's kill: fall back to the idle banner (header badge still says down).
   if (crashed && downSince.current !== null && now - downSince.current > 60000) crashed = false;
   const crash = crashed ? { secs: Math.max(0, Math.round((now - (downSince.current ?? now)) / 1000)), seq: lastCp?.seq ?? null } : null;
-  const banner = queue[0]?.start != null && !rp?.done ? queue[0].m : null;
+  // Replay: the banner is whatever moment the cursor sits on (within 6s of playback time), so scrubbing lands on it.
+  const replayBanner = rdata ? [...all].reverse().find((m) => m.at <= curAt && curAt - m.at <= 6000 * rep.speed) ?? null : null;
+  const banner = rdata ? (rp?.done ? null : replayBanner) : queue[0]?.start != null ? queue[0].m : null;
 
   // ---- hero metrics ----
   const hero = useMemo(() => {
@@ -724,7 +845,7 @@ export default function Page() {
   const cmpTiles = [cmp("overfit proposals", hero.overBy), cmp("skipped checkpoints", hero.skipsBy), cmp("regressions", hero.regBy)].filter((x) => x !== null).slice(0, 2);
 
   return (
-    <main className={present ? "present" : ""}>
+    <main className={`${present ? "present" : ""} ${rdata ? "replaying" : ""}`}>
       <header>
         <div className="row between top">
           <span className="brand">WAYPOINTS · flight recorder{params.fixture ? " · DEMO FIXTURE (not live)" : ""}</span>
@@ -864,6 +985,7 @@ export default function Page() {
               ))}
           </section>
 
+          {rdata && <Scrubber data={rdata} rep={rep} />}
           <footer className="proof">
             <span className={`conn ${status}`}>● Atlas · db waypoints</span>
             {counts.map(([k, v]) => (

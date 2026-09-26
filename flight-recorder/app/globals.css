@@ -138,3 +138,22 @@ h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.12em; color: 
 .summary td { padding: 3px 6px; border-top: 1px solid var(--line); font-weight: 700; white-space: nowrap; }
 .summary td.fl { white-space: normal; font-weight: 600; color: var(--soft); }
 @media (max-width: 800px) { .twocol { grid-template-columns: 1fr; } }
+
+/* ---- replay scrubber (fixed to the bottom) ---- */
+main.replaying { padding-bottom: 96px; }
+.scrub { position: fixed; left: 0; right: 0; bottom: 0; z-index: 10; background: #0b0f1a; border-top: 2px solid #6366f1; padding: 6px 16px 10px; }
+.scrubrow { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.sbtn { background: #1e1b4b; color: #fff; border: 1px solid #4f46e5; border-radius: 6px; font: 800 15px var(--sans); padding: 3px 10px; cursor: pointer; }
+.sbtn.play { min-width: 44px; }
+.sbtn.sp.on { background: #6366f1; }
+.speeds { display: inline-flex; gap: 4px; margin-left: 8px; }
+.stime { margin-left: auto; font-family: var(--mono); font-weight: 800; font-size: 16px; color: #c7d2fe; }
+.track { position: relative; height: 30px; }
+.trackfill { position: absolute; left: 0; top: 12px; height: 6px; background: #6366f1; border-radius: 3px; pointer-events: none; }
+.track::before { content: ""; position: absolute; left: 0; right: 0; top: 12px; height: 6px; background: #312e81; border-radius: 3px; }
+.range { position: absolute; inset: 0; width: 100%; margin: 0; background: transparent; -webkit-appearance: none; appearance: none; z-index: 2; cursor: pointer; }
+.range::-webkit-slider-runnable-track { background: transparent; height: 30px; }
+.range::-webkit-slider-thumb { -webkit-appearance: none; width: 6px; height: 30px; background: #fff; border-radius: 3px; }
+.range::-moz-range-thumb { width: 6px; height: 30px; background: #fff; border-radius: 3px; border: 0; }
+.tick { position: absolute; top: 2px; width: 6px; height: 26px; margin-left: -3px; border: 0; border-radius: 2px; padding: 0; z-index: 3; cursor: pointer; }
+.tick:hover { transform: scaleX(1.8); }
