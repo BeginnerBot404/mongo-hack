@@ -111,13 +111,16 @@ function diffOf(c: Doc, s: LiveState): Diff {
       minus.push(...arr(a[k]).filter((x) => !arr(b[k]).includes(x)).map((x) => lock + x));
     } else plus.push(`${k}: ${String(a[k] ?? "∅")} → ${String(b[k])}`);
   }
+  const dedupe = (xs: string[]) => xs.filter((x) => !(!x.startsWith("🔒") && xs.includes(`🔒 ${x}`)));
+  plus.splice(0, plus.length, ...dedupe(plus));
+  minus.splice(0, minus.length, ...dedupe(minus));
   const tap = c.reason?.kind === "tap" ? s.taps.find((x) => x._id === c.reason.id) : null;
   let axis = tap?.axis ? String(tap.axis) : outreachChange(c, s.harness_config)?.axis ?? (fields.map((f) => AXIS_OF[f] ?? f)[0] ?? "settings");
   if (fields.includes("required_tools") && fields.includes("granted_tools")) axis = "guardrail";
   const trig = tap ? s.failures.find((f) => f._id === tap.trigger?.id) : null;
   const cls = trig?.class ?? c.probation?.watch_class ?? /^([\w-]+)/.exec(String(c.reason?.summary ?? ""))?.[1] ?? null;
-  const n = cls ? s.failures.filter((f) => f.class === cls).length : 0;
-  const because = cls ? `${cls}${n > 1 ? ` ×${n}` : ""}` : c.reason?.kind === "manual_seed" || c.created_by === "seed" ? "seed" : null;
+  const n = cls ? s.failures.filter((f) => f.class === cls && t(f.created_at) <= t(c.created_at) + 1000).length : 0;
+  const because = !c.probation && c.created_by !== "seed" && c.parent_version != null ? null : cls ? `${cls}${n > 1 ? ` ×${n}` : ""}` : c.reason?.kind === "manual_seed" || c.created_by === "seed" ? "seed" : null;
   let trial: string | null = null;
   if (c.probation) {
     const since = s.checkpoints.filter((x) => x.seq > c.probation.started_seq).length;
@@ -373,7 +376,7 @@ function DraftRow({ d, s, prevAt, open, toggle, onOpen }: { d: Doc; s: LiveState
             <div className="dsub">“{one(d.subject) || "(no subject)"}”</div>
             <div className="dprev">{body.replace(/\n\s*\n+/g, "\n")}</div>
           </Step>
-          <Step label="QA gate" off={at - start} total={total} raw={d.qa} rawTitle="drafts.qa" onOpen={onOpen}>
+          <Step label="QA gate" off={at - start} total={total} raw={d} rawTitle={`drafts · ${short(d._id)} · qa`} onOpen={onOpen}>
             <div className="qchips">
               {QA_ORDER.map(([cls, lbl]) => {
                 const bad = fails.some((f) => f.class === cls);
@@ -415,7 +418,7 @@ function DraftRow({ d, s, prevAt, open, toggle, onOpen }: { d: Doc; s: LiveState
 
 function ChangeDivider({ c, s, onOpen }: { c: Doc; s: LiveState; onOpen: (t: string, d: Doc) => void }) {
   const d = diffOf(c, s);
-  const restore = !c.probation && c.reason?.kind !== "tap" && /roll|restore|undo/i.test(String(c.reason?.summary ?? c.created_by ?? ""));
+  const restore = !c.probation && c.created_by !== "seed";
   return (
     <div className={`divider change ${restore ? "restore" : ""}`}>
       <span className="dvl" />
@@ -423,7 +426,7 @@ function ChangeDivider({ c, s, onOpen }: { c: Doc; s: LiveState; onOpen: (t: str
         <b>{restore ? "HARNESS RESTORED" : "HARNESS REBUILT"}</b> {d.from != null ? `v${d.from} → ` : ""}v{d.to} · <b className="dvaxis">{d.axis.toUpperCase()}</b>
         {d.plus.length > 0 && <> · <span className="plus">{d.plus.map((x) => `+ ${x}`).join("  ")}</span></>}
         {d.minus.length > 0 && <> · <span className="minus">{d.minus.map((x) => `− ${x}`).join("  ")}</span></>}
-        {d.because && d.because !== "seed" && <> · because {d.because}</>}
+        {!restore && d.because && d.because !== "seed" && <> · because {d.because}</>}
         {c.probation && !c.outcome && <> · <span className="mid">{d.trial}</span></>}
       </span>
       <Json doc={c} title={`harness_config · v${c.version}`} onOpen={onOpen} />
@@ -562,7 +565,7 @@ export default function Live() {
             ) : (
               <div key={`r${it.r._id}`} className="divider resume">
                 <span className="dvl" />
-                <span className="dvt"><b>RESUMED</b> · picked up from Atlas{it.r.from_seq != null ? ` at save point #${it.r.from_seq}` : ""}</span>
+                <span className="dvt">{Math.abs(it.at - t(o?.created_at)) < 60_000 ? <><b>RUN STARTED</b> · objective set in Atlas · harness v{currentConfig(s.harness_config.filter((c) => t(c.created_at) <= it.at))?.version ?? "?"}</> : <><b>RESUMED</b> · picked up from Atlas{it.r.from_seq != null ? ` at save point #${it.r.from_seq}` : ""}</>}</span>
                 <Json doc={it.r} title="resumes" onOpen={onOpen} />
                 <span className="dvl" />
               </div>

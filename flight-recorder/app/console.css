@@ -241,3 +241,4 @@ main.console.trace { display: grid; grid-template-columns: minmax(0, 7fr) minmax
   .tacct { max-width: 170px; }
   .bignums .mv { font-size: 34px; }
 }
+.jbtn { white-space: nowrap; flex: 0 0 auto; }

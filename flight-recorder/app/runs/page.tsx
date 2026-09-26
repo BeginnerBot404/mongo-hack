@@ -96,7 +96,7 @@ export default async function Runs({ searchParams }: { searchParams: Promise<Rec
                     const v = c.outcome?.verdict as string | undefined;
                     return (
                       <span key={String(c._id)} className={`vchip ${v === "kept" ? "kept" : v ? "undone" : c.status === "probation" ? "trial" : ""}`}>
-                        v{c.version} {axisOf(c)} · {v === "kept" ? "kept" : v ? "undone" : c.status === "probation" ? "trial" : c.status}
+                        v{c.version} {c.probation ? axisOf(c) : "restore"} · {v === "kept" ? "kept" : v ? "undone" : c.status === "probation" ? "trial" : c.probation ? c.status : `v${c.parent_version ?? "?"}`}
                       </span>
                     );
                   })}
