@@ -97,29 +97,32 @@ export async function runOutreach(o: OutreachOpts): Promise<void> {
   // ---------- objective ----------
   log(bold(cyan(`\n▶ waypoints harness · task=outreach · agent=${AGENT} · ${o.fresh ? "fresh objective" : "resume"} · queue ${QUEUE}`)));
   let objectiveId: string | null = null;
+  // The rising bar (src/outreach/bar.ts): each batch objective works under a bar version (QA level + locked target).
+  let bar: { version: number; level: number; target_pct: number } = { version: 1, level: 1, target_pct: T_PASS };
   let batch = 1, campaign = 1;
   const campaignName = (c: number) => (c === 1 ? "first touch" : c === 2 ? "re-engagement" : `campaign ${c}`);
   async function openObjective(b: number, c: number): Promise<string> {
+    bar = await T.activeBar(wdb);
     const title = b === 1 && c === 1 ? OBJECTIVE : `Outbound batch ${b} (campaign ${c}: ${campaignName(c)}). ${OBJECTIVE}`;
     const so = await call("set_objective", {
       objective: `${TAG} ${title}`,
       task: "outreach",
       bearings: [
-        { name: "qa_pass_rate", target: T_PASS, unit: "%", current: 0 },
+        { name: "qa_pass_rate", target: bar.target_pct, unit: "%", current: 0 },
         { name: "accounts_done", target: QUEUE, unit: "count", current: 0 },
       ],
       waypoints: [
         { title: "First drafts", done_when: "the first accounts are drafted and graded" },
         { title: "Harness adapts", done_when: "QA failures drove at least one kept harness change" },
         { title: "Queue worked", done_when: `all ${QUEUE} accounts done` },
-        { title: "Reach end state", done_when: `every account done and first-try pass rate ≥ ${T_PASS}%` },
+        { title: "Reach end state", done_when: `every account done and first-try pass rate ≥ ${bar.target_pct}% (QA level ${bar.level})` },
       ],
-      end_state: { description: `Every account in the queue done AND whole-queue first-try QA pass rate ≥ ${T_PASS}%`, bearing: "qa_pass_rate", target: T_PASS },
+      end_state: { description: `Every account in the queue done AND whole-queue first-try QA pass rate ≥ ${bar.target_pct}% at QA level ${bar.level}`, bearing: "qa_pass_rate", target: bar.target_pct },
       agent: AGENT,
     });
     if (so.error) throw new Error(`set_objective: ${so.error}`);
     const id = String(so.objective_id);
-    await wdb.collection("objectives").updateOne({ _id: new ObjectId(id) }, { $set: { batch: b, campaign: campaignName(c), campaign_no: c } });
+    await wdb.collection("objectives").updateOne({ _id: new ObjectId(id) }, { $set: { batch: b, campaign: campaignName(c), campaign_no: c, bar_version: bar.version, level: bar.level, target: bar.target_pct } });
     log(`${magenta("→ set_objective".padEnd(15))} ${clip(title, 90)}  ${dim(id)}`);
     return id;
   }
@@ -130,10 +133,11 @@ export async function runOutreach(o: OutreachOpts): Promise<void> {
   const objText = String(resumed.objective?.objective ?? resumed.objective ?? "");
   if (!objText.includes(TAG)) throw new Error(`latest objective is not an outreach objective ("${clip(objText, 60)}"): run with --fresh`);
   {
-    const od: any = await wdb.collection("objectives").findOne({ _id: new ObjectId(objectiveId) }, { projection: { batch: 1, campaign_no: 1 } });
+    const od: any = await wdb.collection("objectives").findOne({ _id: new ObjectId(objectiveId) }, { projection: { batch: 1, campaign_no: 1, bar_version: 1 } });
     batch = od?.batch ?? 1; campaign = od?.campaign_no ?? 1;
+    if (typeof od?.bar_version === "number") bar = await T.barByVersion(od.bar_version, wdb); // missing → level 1, 80%
   }
-  log(bold(`◎ END STATE every account done AND first-try pass rate ≥ ${T_PASS}% — immutable`));
+  log(bold(`◎ END STATE every account done AND first-try pass rate ≥ ${bar.target_pct}% — immutable · bar v${bar.version} QA level ${bar.level}`));
 
   // ---------- settings -> harness shape ----------
   async function loadShape(): Promise<Shape> {
@@ -187,7 +191,7 @@ export async function runOutreach(o: OutreachOpts): Promise<void> {
       lookup_account: t(async () => JSON.stringify(await T.lookup_account({ account: w.current.account })), "lookup_account",
         "The full CRM record for this account.", z.object({})),
       precheck_email: t(async (a) => {
-        const r: any = await T.precheck_email({ subject: a.subject, body: a.body, account: w.current.account });
+        const r: any = await T.precheck_email({ subject: a.subject, body: a.body, account: w.current.account, objective_id: objectiveId! });
         log(dim(`    ${w.tag} ⛨ precheck ${r?.pass ? green("clean") : red((r?.failures ?? []).map((f: any) => f.class).join(", "))}`));
         return JSON.stringify(r);
       }, "precheck_email", "Run the QA gate on a draft WITHOUT submitting it. Returns {pass, failures}.", draftSchema),
@@ -294,7 +298,7 @@ export async function runOutreach(o: OutreachOpts): Promise<void> {
   const firstTryRate = () => stats?.first_try_pass_rate ?? 0;
   const doneCount = () => stats?.done ?? 0;
   const total = () => stats?.total || QUEUE;
-  const reached = () => !!stats && stats.total > 0 && stats.done >= stats.total && stats.first_try_pass_rate >= T_PASS;
+  const reached = () => !!stats && stats.total > 0 && stats.done >= stats.total && stats.first_try_pass_rate >= bar.target_pct;
   /** Always called inside serial(). */
   async function checkpoint(summary: string) {
     await readStats();
@@ -429,6 +433,9 @@ export async function runOutreach(o: OutreachOpts): Promise<void> {
       await checkpoint(`Batch ${batch} finished: ${doneCount()}/${total()} done, first-try pass rate ${pct(firstTryRate())}.`);
       await wdb.collection("objectives").updateOne({ _id: new ObjectId(objectiveId!) }, { $set: { status: "completed", completed_at: new Date(), final: { done: doneCount(), total: total(), first_try_pass_rate: firstTryRate(), reached: reached() } } });
       log(bold(`  ■ batch ${batch} closed: ${doneCount()}/${total()} done · first-try ${pct(firstTryRate())}${reached() ? green(" · END STATE REACHED") : ""}`));
+      // RAISE THE BAR: earned (end state met) → next bar version (level +1, higher target); else the bar holds.
+      const settled = await T.settleBar({ objective_id: objectiveId!, batch, first_try_pct: firstTryRate(), reached: reached(), agent: AGENT }, wdb);
+      log((settled.raised ? green : yellow)(bold(`  ${settled.raised ? "▲" : "="} ${settled.text}`)));
       const nb = await T.loadNextBatch(QUEUE);
       if (nb.campaign_reset) campaign++;
       batch++;
@@ -472,8 +479,8 @@ export async function runOutreach(o: OutreachOpts): Promise<void> {
   log(dim(`  ${secsPerAccount.length} accounts · ${avg.toFixed(1)}s per account per worker · ${(secsPerAccount.length ? wall / secsPerAccount.length : 0).toFixed(1)}s wall per account · ${o.workers} worker(s) · ${turns} model turns · ${submits} submissions · settings v${boot.version} → v${(shape as Shape | null)?.version}`));
   const ok = reached();
   log(ok
-    ? green(bold(`■ END STATE REACHED: ${doneCount()}/${total()} done, first-try pass rate ${pct(firstTryRate())} ≥ ${T_PASS}%`))
-    : yellow(bold(`■ stopped (${stopReason}): ${doneCount()}/${total()} done, first-try pass rate ${pct(firstTryRate())} (end state ${T_PASS}%)`)) +
+    ? green(bold(`■ END STATE REACHED: ${doneCount()}/${total()} done, first-try pass rate ${pct(firstTryRate())} ≥ ${bar.target_pct}%`))
+    : yellow(bold(`■ stopped (${stopReason}): ${doneCount()}/${total()} done, first-try pass rate ${pct(firstTryRate())} (end state ${bar.target_pct}%)`)) +
       dim(`  · ${Math.round((Date.now() - t0) / 1000)}s`));
   process.exit(ok ? 0 : 1);
 }
