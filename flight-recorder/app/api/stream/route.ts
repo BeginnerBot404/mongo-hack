@@ -6,9 +6,9 @@ import { dbParam, waypointsDb } from "@/lib/mongo";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const PER_OBJECTIVE = ["checkpoints", "decisions", "failures", "resumes", "policies", "taps", "events", "rubrics"] as const;
+const PER_OBJECTIVE = ["checkpoints", "decisions", "failures", "resumes", "policies", "taps", "events", "rubrics", "drafts"] as const;
 const GLOBAL = ["harness_config"] as const;
-const WATCHED = ["objectives", ...GLOBAL, ...PER_OBJECTIVE];
+const WATCHED = ["objectives", "accounts", ...GLOBAL, ...PER_OBJECTIVE];
 const NO_EMBED = { projection: { embedding: 0 } };
 
 async function snapshot(pinned?: ObjectId | null, dbName?: string | null) {
@@ -18,11 +18,18 @@ async function snapshot(pinned?: ObjectId | null, dbName?: string | null) {
     : await db.collection("objectives").findOne({}, { sort: { created_at: -1 } });
   const out: Record<string, unknown> = { objective, at: new Date() };
   for (const g of GLOBAL) out[g] = await db.collection(g).find({}, NO_EMBED).sort({ version: 1 }).limit(100).toArray();
+  // the queue in play (reserve accounts are loaded but not queued)
+  out.accounts = await db
+    .collection("accounts")
+    .find({ status: { $in: ["pending", "in_progress", "done", "failed"] } }, { projection: { embedding: 0 } })
+    .sort({ queue_index: 1 })
+    .limit(200)
+    .toArray();
   if (!objective) {
     for (const c of PER_OBJECTIVE) out[c] = [];
     return out;
   }
-  const limits: Record<string, number> = { checkpoints: 60, events: 150, taps: 40 };
+  const limits: Record<string, number> = { checkpoints: 60, events: 150, taps: 40, drafts: 200, failures: 200 };
   await Promise.all(
     PER_OBJECTIVE.map(async (c) => {
       const docs = await db

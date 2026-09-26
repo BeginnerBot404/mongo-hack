@@ -1,0 +1,601 @@
+"use client";
+// /live: the glass box. Story strip, then the harness's current shape, the work it produces, and the raw Atlas stream.
+// One SSE connection (/api/stream): snapshot + every change. ?db= passes through, ?objective= pins.
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  EMPTY, OUT_PROBLEM, arr, currentConfig, dbQ, fclass, hhmmss, one, outreachChange, outreachProblem, reduce, t, upsert, useAlive, useNow,
+  type Change, type Doc, type State,
+} from "../Recorder";
+import { fragment } from "@/lib/fragments";
+
+type LiveState = State & { drafts: Doc[]; accounts: Doc[] };
+type Raw = { k: number; at: number; coll: string; op: string; text: string };
+
+const ALL_CONTEXT = ["account_name", "account_summary", "account_record_full", "product_catalog"];
+const OPTIONAL_TOOLS = ["outline_email", "lookup_account", "precheck_email"];
+const QUEUED = ["pending", "in_progress", "done", "failed"];
+const visibleTools = (st: Doc) => [
+  ...OPTIONAL_TOOLS.filter((x) => arr(st.granted_tools).includes(x) || (x === "precheck_email" && arr(st.required_tools).includes(x))),
+  "submit_email",
+];
+const pct = (x: number | null) => (x == null ? "—" : `${Math.round(x * 100)}%`);
+const rateCls = (x: number | null) => (x == null ? "" : x >= 0.8 ? "good" : x >= 0.5 ? "mid" : "bad");
+const AXIS_OF: Record<string, string> = { prompt_fragments: "rules", context_sources: "context policy", reasoning: "reasoning mode", required_tools: "guardrail", granted_tools: "tool access", model: "model", sentinel_threshold: "sentinel" };
+
+// ---------- raw change stream lines (mirror of view:atlas trim()) ----------
+function trimRaw(v: unknown, key = ""): unknown {
+  if (typeof v === "string") {
+    if (/^[0-9a-f]{24}$/.test(v)) return `…${v.slice(-6)}`;
+    if (/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d/.test(v)) return hhmmss(v);
+    return v.length > 80 ? v.slice(0, 79) + "…" : v;
+  }
+  if (Array.isArray(v)) {
+    if ((v.length > 16 && v.every((x) => typeof x === "number")) || (/embedding|vector/i.test(key) && v.length)) return `[${v.length} floats]`;
+    return v.map((x) => trimRaw(x));
+  }
+  if (v && typeof v === "object") {
+    const out: Doc = {};
+    for (const [k, x] of Object.entries(v as Doc)) out[k] = trimRaw(x, k);
+    return out;
+  }
+  return v;
+}
+const compact = (v: unknown) => JSON.stringify(v).replace(/"([A-Za-z_][\w.]*)":/g, "$1:").replace(/,(?=[A-Za-z_"{[])/g, ", ");
+
+function useLive(objective: string | null, ready: boolean) {
+  const [s, setS] = useState<LiveState>({ ...EMPTY, drafts: [], accounts: [] });
+  const [raw, setRaw] = useState<Raw[]>([]);
+  const [status, setStatus] = useState<"connecting" | "live" | "error">("connecting");
+  const [loaded, setLoaded] = useState(false);
+  const k = useRef(0);
+  useEffect(() => {
+    if (!ready) return;
+    const es = new EventSource(`/api/stream?${dbQ()}${objective ? `objective=${encodeURIComponent(objective)}` : ""}`);
+    es.addEventListener("snapshot", (e) => {
+      const d = JSON.parse((e as MessageEvent).data);
+      setS({ ...EMPTY, drafts: [], accounts: [], ...d });
+      setStatus("live");
+      setLoaded(true);
+    });
+    es.addEventListener("change", (e) => {
+      const ch = JSON.parse((e as MessageEvent).data) as Change;
+      setS((prev) => {
+        const base = reduce(prev, ch) as LiveState;
+        const next: LiveState = { ...base, drafts: prev.drafts, accounts: prev.accounts };
+        if (ch.coll === "drafts" && ch.doc && prev.objective && ch.doc.objective_id === prev.objective._id) next.drafts = upsert(prev.drafts, ch.doc, "created_at");
+        if (ch.coll === "accounts" && ch.doc) {
+          const i = prev.accounts.findIndex((a) => a._id === ch.doc!._id);
+          const list = i >= 0 ? prev.accounts.map((a, j) => (j === i ? ch.doc! : a)) : [...prev.accounts, ch.doc];
+          next.accounts = list.filter((a) => QUEUED.includes(a.status));
+        }
+        return next;
+      });
+      if (ch.coll === "accounts" && ch.op === "update") {
+        // queue claims: show only the status flip, not the whole record
+        const d = ch.doc ?? {};
+        const line = compact({ _id: trimRaw(ch.id), $set: { account: d.account, status: d.status, ...(d.claimed_by ? { claimed_by: d.claimed_by } : {}) } });
+        setRaw((r) => [{ k: ++k.current, at: Date.now(), coll: ch.coll, op: ch.op, text: line }, ...r].slice(0, 80));
+        return;
+      }
+      if (ch.coll === "objectives" && ch.op === "update") {
+        const d = ch.doc ?? {};
+        const line = compact({ _id: trimRaw(ch.id), status: d.status, bearings: trimRaw((d.bearings ?? []).map((b: Doc) => ({ [b.name]: b.current }))) });
+        setRaw((r) => [{ k: ++k.current, at: Date.now(), coll: ch.coll, op: ch.op, text: line }, ...r].slice(0, 80));
+        return;
+      }
+      const text = ch.op === "delete" ? compact({ _id: trimRaw(ch.id) }) : compact(trimRaw(ch.doc ?? {}));
+      setRaw((r) => [{ k: ++k.current, at: Date.now(), coll: ch.coll, op: ch.op, text }, ...r].slice(0, 80));
+    });
+    es.addEventListener("ping", () => setStatus("live"));
+    es.addEventListener("error", () => setStatus("error"));
+    return () => es.close();
+  }, [objective, ready]);
+  return { s, raw, status, loaded };
+}
+
+// ---------- harness config diff (one version vs its parent) ----------
+type Diff = { from: number | null; to: number; axis: string; plus: string[]; minus: string[]; because: string | null; trial: string | null; status: string };
+function diffOf(c: Doc, s: LiveState): Diff {
+  const parent = s.harness_config.find((x) => x.version === c.parent_version);
+  const a: Doc = parent?.settings ?? {};
+  const b: Doc = c.settings ?? {};
+  const plus: string[] = [];
+  const minus: string[] = [];
+  const fields: string[] = [];
+  for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) {
+    if (JSON.stringify(a[k]) === JSON.stringify(b[k])) continue;
+    fields.push(k);
+    if (Array.isArray(a[k]) || Array.isArray(b[k])) {
+      const lock = k === "required_tools" ? "🔒 " : "";
+      plus.push(...arr(b[k]).filter((x) => !arr(a[k]).includes(x)).map((x) => lock + x));
+      minus.push(...arr(a[k]).filter((x) => !arr(b[k]).includes(x)).map((x) => lock + x));
+    } else plus.push(`${k}: ${String(a[k] ?? "∅")} → ${String(b[k])}`);
+  }
+  const tap = c.reason?.kind === "tap" ? s.taps.find((x) => x._id === c.reason.id) : null;
+  let axis = tap?.axis ? String(tap.axis) : outreachChange(c, s.harness_config)?.axis ?? (fields.map((f) => AXIS_OF[f] ?? f)[0] ?? "settings");
+  if (fields.includes("required_tools") && fields.includes("granted_tools")) axis = "guardrail";
+  const trig = tap ? s.failures.find((f) => f._id === tap.trigger?.id) : null;
+  const cls = trig?.class ?? c.probation?.watch_class ?? /^([\w-]+)/.exec(String(c.reason?.summary ?? ""))?.[1] ?? null;
+  const n = cls ? s.failures.filter((f) => f.class === cls).length : 0;
+  const because = cls ? `${cls}${n > 1 ? ` ×${n}` : ""}` : c.reason?.kind === "manual_seed" || c.created_by === "seed" ? "seed" : null;
+  let trial: string | null = null;
+  if (c.probation) {
+    const since = s.checkpoints.filter((x) => x.seq > c.probation.started_seq).length;
+    const req = c.probation.checkpoints_required ?? 3;
+    trial = c.outcome ? (c.outcome.verdict === "kept" ? "kept" : "undone") : `trial ${Math.min(since, req)}/${req}`;
+  }
+  return { from: parent?.version ?? c.parent_version ?? null, to: c.version, axis, plus, minus, because, trial, status: c.status };
+}
+
+function DiffCard({ d, flash }: { d: Diff; flash: boolean }) {
+  return (
+    <div className={`diffcard ${flash ? "flash" : "quiet"}`}>
+      <div className="dchead">
+        <span className="dcver">
+          {d.from != null ? `v${d.from} → ` : ""}v{d.to}
+        </span>
+        <span className="dcaxis">{d.axis.toUpperCase()}</span>
+        {d.trial && <span className={`dctrial ${d.trial === "kept" ? "good" : d.trial === "undone" ? "bad" : ""}`}>{d.trial}</span>}
+      </div>
+      <div className="dcbody">
+        {d.plus.map((x) => (
+          <span key={`+${x}`} className="plus">+ {x}</span>
+        ))}
+        {d.minus.map((x) => (
+          <span key={`-${x}`} className="minus">− {x}</span>
+        ))}
+        {d.because && <span className="because">because {d.because}</span>}
+      </div>
+    </div>
+  );
+}
+
+function ShapePanel({ s, now }: { s: LiveState; now: number }) {
+  const cfg = currentConfig(s.harness_config);
+  const [flash, setFlash] = useState<{ v: number; until: number } | null>(null);
+  const seenV = useRef<number | null>(null);
+  useEffect(() => {
+    if (!cfg) return;
+    if (seenV.current !== null && cfg.version !== seenV.current) setFlash({ v: cfg.version, until: Date.now() + 10_000 });
+    seenV.current = cfg.version;
+  }, [cfg?.version]);
+  if (!cfg) return <section className="panel shape"><div className="phead"><h3>Harness shape</h3></div><div className="empty">waiting for the seed version…</div></section>;
+  const st: Doc = cfg.settings ?? {};
+  const parent: Doc = s.harness_config.find((x) => x.version === cfg.parent_version)?.settings ?? {};
+  const isNew = (k: string, x: string) => cfg.parent_version != null && !arr(parent[k]).includes(x);
+  const req = arr(st.required_tools);
+  const tools = visibleTools(st);
+  const d = diffOf(cfg, s);
+  const flashing = !!flash && flash.v === cfg.version && now < flash.until;
+  // last kept/undone verdict on any version (the change the current one may have replaced)
+  const lastVerdict = [...s.harness_config].reverse().find((c) => c.outcome?.verdict && t(c.outcome.decided_at) >= t(s.objective?.created_at));
+  return (
+    <section className="panel shape">
+      <div className="phead">
+        <h3>Harness shape</h3>
+        <span className={`vtag st-${cfg.status}`}>
+          v{cfg.version} · {cfg.status === "probation" ? "on trial" : cfg.status}
+        </span>
+      </div>
+      <DiffCard d={d} flash={flashing} />
+      <div className="shrow">
+        <div className="shk">Tools the model sees</div>
+        <div className="chips">
+          {tools.map((x) => (
+            <span key={x} className={`chip tool ${isNew("granted_tools", x) && x !== "submit_email" ? "new" : ""}`}>
+              {x}
+              {req.includes(x) ? " 🔒" : ""}
+            </span>
+          ))}
+          {OPTIONAL_TOOLS.filter((x) => !tools.includes(x)).map((x) => (
+            <span key={x} className="chip off">{x}</span>
+          ))}
+        </div>
+      </div>
+      <div className="shrow">
+        <div className="shk">Context sources</div>
+        <div className="chips">
+          {ALL_CONTEXT.map((x) => (
+            <span key={x} className={`chip ${arr(st.context_sources).includes(x) ? (isNew("context_sources", x) ? "ctx new" : "ctx") : "off"}`}>{x}</span>
+          ))}
+        </div>
+      </div>
+      <div className="shrow">
+        <div className="shk">Guardrails</div>
+        <div className="chips">
+          {req.map((x) => (
+            <span key={x} className={`chip guard ${isNew("required_tools", x) ? "new" : ""}`}>🔒 {x} required</span>
+          ))}
+          {req.includes("precheck_email") && <span className="chip guard">submit refused unless prechecked</span>}
+        </div>
+      </div>
+      <div className="shrow">
+        <div className="shk">Reasoning</div>
+        <div className="chips">
+          <span className={`chip ${st.reasoning === "on" ? "reason new" : "off"}`}>thinking {st.reasoning ?? "off"}</span>
+          <span className="chip dimchip">model {String(st.model ?? "?")}</span>
+          <span className="chip dimchip">sentinel ≥ {typeof st.sentinel_threshold === "number" ? st.sentinel_threshold.toFixed(2) : "?"}</span>
+        </div>
+      </div>
+      <div className="shk rulesk">Playbook rules (in the system prompt)</div>
+      <div className="rules">
+        {arr(st.prompt_fragments).map((id) => {
+          const f = fragment(id);
+          return (
+            <div key={id} className={`rule ${isNew("prompt_fragments", id) ? "new" : ""}`}>
+              <span className="rid">{id}</span> {f?.text ?? ""}
+            </div>
+          );
+        })}
+      </div>
+      {lastVerdict && lastVerdict.version !== cfg.version && (
+        <div className={`verdict ${lastVerdict.outcome.verdict === "kept" ? "good" : "bad"}`}>
+          v{lastVerdict.version} {lastVerdict.outcome.verdict === "kept" ? "kept" : "undone"}: {one(lastVerdict.outcome.why)}
+        </div>
+      )}
+    </section>
+  );
+}
+
+// ---------- run control (ALLOW_RUN=1 only) ----------
+function RunControl({ alive }: { alive: boolean | null }) {
+  const [allowed, setAllowed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  useEffect(() => {
+    fetch("/api/run", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((j) => setAllowed(!!j.allowed))
+      .catch(() => setAllowed(false));
+  }, []);
+  if (!allowed) return null;
+  const go = async (action: "start" | "stop") => {
+    setBusy(true);
+    try {
+      const r = await fetch(`/api/run?${dbQ()}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action }) });
+      const j = await r.json();
+      setMsg(j.message ?? "");
+    } catch (e) {
+      setMsg(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <span className="runctl" title={msg}>
+      {alive ? (
+        <button className="btn stop" disabled={busy} onClick={() => go("stop")}>■ Stop</button>
+      ) : (
+        <button className="btn start" disabled={busy || alive === null} onClick={() => go("start")}>▶ Start run</button>
+      )}
+    </span>
+  );
+}
+
+// ---------- trace waterfall ----------
+const QA_ORDER: [string, string][] = [
+  ["missing-subject", "subject"],
+  ["missing-personalization", "personalization"],
+  ["invented-fact", "invented-fact"],
+  ["forbidden-promise", "forbidden-promise"],
+  ["placeholder-left", "placeholder"],
+  ["too-long", "length"],
+  ["missing-cta", "CTA"],
+];
+const secs = (ms: number) => (ms < 0 ? "" : ms < 100_000 ? `${Math.round(ms / 1000)}s` : `${Math.round(ms / 60000)}m`);
+const short = (id: unknown) => `…${String(id ?? "").slice(-6)}`;
+const money = (m: unknown) => (typeof m === "number" ? `$${m >= 1000 ? `${(m / 1000).toFixed(1)}B` : `${Math.round(m)}M`}` : "?");
+const band = (n: unknown) => (typeof n !== "number" ? "?" : n < 1000 ? "small" : n < 5000 ? "mid-size" : "large");
+
+function contextText(sources: string[], a: Doc | undefined): { full: boolean; text: string } {
+  const parts: string[] = [];
+  const full = sources.includes("account_record_full");
+  if (full && a)
+    parts.push(
+      `FULL RECORD: ${[a.sector, a.year_established, money(a.revenue_musd), typeof a.employees === "number" ? `${a.employees.toLocaleString("en-US")} staff` : null, a.office_location, a.subsidiary_of ? `sub. of ${a.subsidiary_of}` : null]
+        .filter(Boolean)
+        .join(", ")}`,
+    );
+  else if (sources.includes("account_summary") && a) parts.push(`summary: ${a.sector}, ${band(a.employees)}`);
+  else if (sources.includes("account_name")) parts.push("name only");
+  if (sources.includes("product_catalog")) parts.push("product catalog");
+  return { full, text: parts.join(" + ") || "(nothing)" };
+}
+
+type Item =
+  | { kind: "draft"; at: number; d: Doc }
+  | { kind: "change"; at: number; c: Doc }
+  | { kind: "verdict"; at: number; c: Doc }
+  | { kind: "resume"; at: number; r: Doc };
+
+function Json({ doc, title, onOpen }: { doc: Doc | undefined | null; title: string; onOpen: (t: string, d: Doc) => void }) {
+  if (!doc) return null;
+  return (
+    <button className="jbtn" title="open the raw Atlas document" onClick={(e) => { e.stopPropagation(); onOpen(title, doc); }}>
+      {"{ }"}
+    </button>
+  );
+}
+
+function Step({ label, off, total, children, raw, rawTitle, onOpen, cls = "" }: { label: string; off: number; total: number; children: React.ReactNode; raw?: Doc | null; rawTitle?: string; onOpen: (t: string, d: Doc) => void; cls?: string }) {
+  const w = total > 0 ? Math.max(1.5, Math.min(100, (off / total) * 100)) : 100;
+  return (
+    <div className={`step ${cls}`}>
+      <div className="slabel">{label}</div>
+      <div className="sbar"><i style={{ width: `${w}%` }} /></div>
+      <div className="sbody">{children}</div>
+      <div className="sright">
+        <span className="soff">{off > 0 ? `+${secs(off)}` : ""}</span>
+        <Json doc={raw} title={rawTitle ?? label} onOpen={onOpen} />
+      </div>
+    </div>
+  );
+}
+
+function DraftRow({ d, s, prevAt, open, toggle, onOpen }: { d: Doc; s: LiveState; prevAt: number | null; open: boolean; toggle: () => void; onOpen: (t: string, d: Doc) => void }) {
+  const at = t(d.created_at);
+  const acct = s.accounts.find((a) => a.account === d.account);
+  const cfg = s.harness_config.find((c) => c.version === d.settings_version);
+  const fails: Doc[] = d.qa?.failures ?? [];
+  const dur = prevAt != null && at - prevAt < 600_000 ? at - prevAt : 0;
+  const start = at - dur;
+  const re = new RegExp(`on ${d.account?.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} \\(attempt ${d.attempt ?? 1}\\)`);
+  const logged = s.failures.filter((f) => t(f.created_at) >= at - 2000 && t(f.created_at) - at < 120_000 && re.test(String(f.failure ?? "")));
+  const taps = s.taps.filter((x) => logged.some((f) => f._id === x.trigger?.id));
+  const tap = taps.find((x) => x.decision?.tap) ?? taps[0];
+  const last = Math.max(at, ...logged.map((f) => t(f.created_at)), ...(tap ? [t(tap.created_at)] : []));
+  const total = last - start;
+  const ctx = contextText(arr(cfg?.settings?.context_sources), acct);
+  const pass = !!d.qa?.pass;
+  const worker = d.worker ?? (d.agent && d.agent !== "waypoints-harness" ? d.agent : null);
+  const body = String(d.body ?? "");
+  return (
+    <div className={`trow ${pass ? "tpass" : "tfail"} ${open ? "open" : ""}`}>
+      <div className="thead" onClick={toggle}>
+        <span className="tcaret">{open ? "▾" : "▸"}</span>
+        <span className="ticon">✉</span>
+        <span className="tq">#{acct?.queue_index ?? "?"}</span>
+        <span className="tacct">{d.account}</span>
+        {(d.attempt ?? 1) > 1 && <span className="tretry">retry</span>}
+        {worker && <span className="worker">{String(worker)}</span>}
+        <span className="vpill">playbook v{d.settings_version ?? "?"}</span>
+        <span className={`tverdict ${pass ? "good" : "bad"}`}>{pass ? "✔ passed QA" : `✘ ${fails.length} failed check${fails.length === 1 ? "" : "s"}`}</span>
+        {!open && !pass && <span className="tclasses">{fails.map((f) => f.class).join(" · ")}</span>}
+        <span className="tdur">{dur ? secs(dur) : ""}</span>
+        <span className="ttime">{hhmmss(at)}</span>
+      </div>
+      {open && (
+        <div className="steps">
+          <Step label="context" off={0} total={total} raw={acct} rawTitle={`accounts · ${d.account}`} onOpen={onOpen} cls={ctx.full ? "ctxfull" : ""}>
+            <span className={ctx.full ? "ctxfull" : "ctxlean"}>{ctx.text}</span>
+          </Step>
+          <Step label="draft" off={at - start} total={total} raw={d} rawTitle={`drafts · ${short(d._id)}`} onOpen={onOpen}>
+            <div className="dsub">“{one(d.subject) || "(no subject)"}”</div>
+            <div className="dprev">{body.replace(/\n\s*\n+/g, "\n")}</div>
+          </Step>
+          <Step label="QA gate" off={at - start} total={total} raw={d.qa} rawTitle="drafts.qa" onOpen={onOpen}>
+            <div className="qchips">
+              {QA_ORDER.map(([cls, lbl]) => {
+                const bad = fails.some((f) => f.class === cls);
+                return <span key={cls} className={`qc ${bad ? "x" : "ok"}`}>{bad ? "✘" : "✔"} {lbl}</span>;
+              })}
+            </div>
+            {fails.map((f, i) => (
+              <div key={i} className="qdetail"><b>{f.class}</b> {one(f.detail)}</div>
+            ))}
+          </Step>
+          {logged.length > 0 && (
+            <Step label="logged" off={Math.max(...logged.map((f) => t(f.created_at))) - start} total={total} raw={logged[0]} rawTitle={`failures · ${short(logged[0]._id)}`} onOpen={onOpen}>
+              <span className="logged">
+                {logged.map((f) => (
+                  <span key={f._id} className="lg" onClick={() => onOpen(`failures · ${short(f._id)}`, f)}>
+                    {f.class} → failures <code>{short(f._id)}</code>
+                  </span>
+                ))}
+              </span>
+            </Step>
+          )}
+          {tap && (
+            <Step label="sentinel" off={t(tap.created_at) - start} total={total} raw={tap} rawTitle={`taps · ${short(tap._id)}`} onOpen={onOpen}>
+              <span className="tapline">
+                risk <b>{Number(tap.risk ?? 0).toFixed(2)}</b> = sim {Number(tap.components?.similarity ?? 0).toFixed(2)} · recur {Number(tap.components?.recurrence ?? 0).toFixed(2)} · trend {Number(tap.components?.trend ?? 0).toFixed(1)}
+                {tap.decision?.tap ? (
+                  <b className="alert"> → ALERT → {tap.axis ? `${String(tap.axis)}${tap.settings_version_after ? ` (v${tap.settings_version_after})` : " (queued)"}` : String(tap.decision?.action ?? "")}</b>
+                ) : (
+                  <span className="dimtxt"> → below threshold</span>
+                )}
+              </span>
+            </Step>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ChangeDivider({ c, s, onOpen }: { c: Doc; s: LiveState; onOpen: (t: string, d: Doc) => void }) {
+  const d = diffOf(c, s);
+  const restore = !c.probation && c.reason?.kind !== "tap" && /roll|restore|undo/i.test(String(c.reason?.summary ?? c.created_by ?? ""));
+  return (
+    <div className={`divider change ${restore ? "restore" : ""}`}>
+      <span className="dvl" />
+      <span className="dvt">
+        <b>{restore ? "HARNESS RESTORED" : "HARNESS REBUILT"}</b> {d.from != null ? `v${d.from} → ` : ""}v{d.to} · <b className="dvaxis">{d.axis.toUpperCase()}</b>
+        {d.plus.length > 0 && <> · <span className="plus">{d.plus.map((x) => `+ ${x}`).join("  ")}</span></>}
+        {d.minus.length > 0 && <> · <span className="minus">{d.minus.map((x) => `− ${x}`).join("  ")}</span></>}
+        {d.because && d.because !== "seed" && <> · because {d.because}</>}
+        {c.probation && !c.outcome && <> · <span className="mid">{d.trial}</span></>}
+      </span>
+      <Json doc={c} title={`harness_config · v${c.version}`} onOpen={onOpen} />
+      <span className="dvl" />
+    </div>
+  );
+}
+
+function VerdictDivider({ c, onOpen }: { c: Doc; onOpen: (t: string, d: Doc) => void }) {
+  const kept = c.outcome?.verdict === "kept";
+  return (
+    <div className={`divider ${kept ? "kept" : "undone"}`}>
+      <span className="dvl" />
+      <span className="dvt">
+        <b>{kept ? "TRIAL PASSED" : "UNDONE"}</b> · v{c.version} {kept ? "kept" : "rolled back"} · {one(c.outcome?.why).replace(/\s*(Kept|Rolled back|Undone)\.?\s*$/i, "")}
+      </span>
+      <Json doc={c} title={`harness_config · v${c.version}`} onOpen={onOpen} />
+      <span className="dvl" />
+    </div>
+  );
+}
+
+function Drawer({ open, onClose }: { open: { title: string; doc: Doc } | null; onClose: () => void }) {
+  useEffect(() => {
+    const k = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", k);
+    return () => window.removeEventListener("keydown", k);
+  }, [onClose]);
+  if (!open) return null;
+  const pretty = JSON.stringify(
+    open.doc,
+    (k, v) => (Array.isArray(v) && ((v.length > 16 && v.every((x) => typeof x === "number")) || /embedding|vector/i.test(k)) ? `[${v.length} floats]` : v),
+    2,
+  );
+  return (
+    <div className="drawerwrap" onClick={onClose}>
+      <aside className="drawer" onClick={(e) => e.stopPropagation()}>
+        <div className="drhead">
+          <span>
+            <b>{open.title}</b> <span className="dimtxt">· raw Atlas document</span>
+          </span>
+          <button className="jbtn" onClick={onClose}>esc ✕</button>
+        </div>
+        <pre>{pretty}</pre>
+      </aside>
+    </div>
+  );
+}
+
+export default function Live() {
+  const [ready, setReady] = useState(false);
+  const [pin, setPin] = useState<string | null>(null);
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    setPin(q.get("objective"));
+    setReady(true);
+  }, []);
+  const { s, status, loaded } = useLive(pin, ready);
+  const alive = useAlive(ready);
+  const now = useNow(1000);
+  const o = s.objective;
+  const end = o?.end_state as Doc | undefined;
+  const [toggled, setToggled] = useState<Record<string, boolean>>({});
+  const [drawer, setDrawer] = useState<{ title: string; doc: Doc } | null>(null);
+  const onOpen = (title: string, doc: Doc) => setDrawer({ title, doc });
+
+  const m = useMemo(() => {
+    const ft = s.drafts.filter((d) => (d.attempt ?? 1) <= 1);
+    const ftPass = ft.filter((d) => d.qa?.pass).length;
+    const l10 = s.drafts.slice(-10);
+    const done = s.accounts.filter((a) => a.status === "done" || a.status === "failed").length;
+    const workers = new Set(s.accounts.filter((a) => a.status === "in_progress" && a.claimed_by).map((a) => a.claimed_by)).size;
+    return {
+      first: ft.length ? ftPass / ft.length : null, ftPass, ftN: ft.length,
+      roll: l10.length ? l10.filter((d) => d.qa?.pass).length / l10.length : null, rPass: l10.filter((d) => d.qa?.pass).length, rN: l10.length,
+      done, total: s.accounts.length, workers,
+    };
+  }, [s.drafts, s.accounts]);
+  const target = typeof end?.target === "number" ? end.target : 80;
+
+  const items = useMemo(() => {
+    const out: Item[] = s.drafts.map((d) => ({ kind: "draft" as const, at: t(d.created_at), d }));
+    const since = t(o?.created_at);
+    for (const c of s.harness_config) {
+      if (c.change && t(c.created_at) >= since) out.push({ kind: "change", at: t(c.created_at), c });
+      if (c.outcome?.decided_at && t(c.outcome.decided_at) >= since) out.push({ kind: "verdict", at: t(c.outcome.decided_at), c });
+    }
+    for (const r of s.resumes) out.push({ kind: "resume", at: t(r.created_at), r });
+    return out.sort((a, b) => b.at - a.at);
+  }, [s.drafts, s.harness_config, s.resumes, o?.created_at]);
+
+  // previous submit by the same worker → per-draft duration
+  const prevAt = useMemo(() => {
+    const map = new Map<string, number | null>();
+    const lastBy = new Map<string, number>();
+    for (const d of s.drafts) {
+      const w = String(d.worker ?? d.agent ?? "");
+      map.set(d._id, lastBy.get(w) ?? (o ? t(o.created_at) : null));
+      lastBy.set(w, t(d.created_at));
+    }
+    return map;
+  }, [s.drafts, o]);
+  const latestIds = s.drafts.slice(-3).map((d) => d._id);
+  const crashed = alive === false && o && o.status !== "completed" && s.drafts.length > 0 && now - t(s.drafts[s.drafts.length - 1]?.created_at) < 600_000;
+
+  return (
+    <main className="console trace">
+      <section className="waterfall">
+        <div className="wfhead">
+          <h3>Trace</h3>
+          <span className="psub">one row per email · real steps from Atlas · newest first · click a row to expand, {"{ }"} for the raw document</span>
+          <span className={`pill ${status === "live" ? "live" : "off"}`}>{status === "live" ? "● Atlas live" : status === "connecting" ? "○ connecting" : "○ reconnecting"}</span>
+        </div>
+        <div className="wflist">
+          {!loaded && <div className="empty">connecting to Atlas…</div>}
+          {loaded && !o && <div className="empty">no objective yet — waiting for the harness to start…</div>}
+          {crashed && (
+            <div className="divider crash"><span className="dvl" /><span className="dvt"><b>HARNESS PROCESS DOWN</b> · last write {secs(now - t(s.drafts[s.drafts.length - 1]?.created_at))} ago</span><span className="dvl" /></div>
+          )}
+          {loaded && o && items.length === 0 && <div className="empty">objective set — waiting for the first draft…</div>}
+          {items.map((it) =>
+            it.kind === "draft" ? (
+              <DraftRow
+                key={it.d._id}
+                d={it.d}
+                s={s}
+                prevAt={prevAt.get(it.d._id) ?? null}
+                open={toggled[it.d._id] ?? latestIds.includes(it.d._id)}
+                toggle={() => setToggled((x) => ({ ...x, [it.d._id]: !(x[it.d._id] ?? latestIds.includes(it.d._id)) }))}
+                onOpen={onOpen}
+              />
+            ) : it.kind === "change" ? (
+              <ChangeDivider key={`c${it.c._id}`} c={it.c} s={s} onOpen={onOpen} />
+            ) : it.kind === "verdict" ? (
+              <VerdictDivider key={`v${it.c._id}`} c={it.c} onOpen={onOpen} />
+            ) : (
+              <div key={`r${it.r._id}`} className="divider resume">
+                <span className="dvl" />
+                <span className="dvt"><b>RESUMED</b> · picked up from Atlas{it.r.from_seq != null ? ` at save point #${it.r.from_seq}` : ""}</span>
+                <Json doc={it.r} title="resumes" onOpen={onOpen} />
+                <span className="dvl" />
+              </div>
+            ),
+          )}
+        </div>
+      </section>
+      <aside className="side">
+        <div className="goalcard">
+          <div className="gk">🔒 Locked goal · the destination</div>
+          <div className="gv">every account done · first-try QA pass ≥ <b>{target}%</b></div>
+        </div>
+        <div className="bignums">
+          <div className="meter">
+            <div className="mk">Pass rate · last 10</div>
+            <div className={`mv ${rateCls(m.roll)}`}>{pct(m.roll)}</div>
+            <div className="mbar"><i style={{ width: `${Math.round((m.roll ?? 0) * 100)}%` }} /><b style={{ left: `${target}%` }} /></div>
+            <div className="msub">first-try {pct(m.first)} ({m.ftPass}/{m.ftN})</div>
+          </div>
+          <div className="meter">
+            <div className="mk">Accounts done</div>
+            <div className="mv">{m.done}<span className="of">/{m.total || "?"}</span></div>
+            <div className="mbar"><i className="acc" style={{ width: `${m.total ? Math.round((m.done / m.total) * 100) : 0}%` }} /></div>
+            <div className="msub">
+              {alive ? "harness running" : alive === false ? "harness idle" : ""}
+              {m.workers ? ` · ${m.workers} workers` : ""}
+            </div>
+          </div>
+        </div>
+        <RunControl alive={alive} />
+        <ShapePanel s={s} now={now} />
+      </aside>
+      <Drawer open={drawer} onClose={() => setDrawer(null)} />
+    </main>
+  );
+}
