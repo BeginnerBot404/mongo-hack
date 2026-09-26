@@ -46,7 +46,8 @@ export default async function Runs({ searchParams }: { searchParams: Promise<Rec
     const last = Math.max(ms(o.updated_at), ...mine.map((d) => ms(d.created_at)), start);
     const versions = cfgs.filter((c) => c.change && ms(c.created_at) >= start && ms(c.created_at) < endBound && c.created_by !== "seed");
     const accTarget = ((o.bearings ?? []) as Document[]).find((b) => b.name === "accounts_done")?.target;
-    return { o, start, last, ft, early, late, done, accTarget, versions, n: mine.length };
+    const vAt = (at: number) => [...cfgs].filter((c) => ms(c.created_at) <= at + 1000).sort((a, b) => b.version - a.version)[0]?.version ?? null;
+    return { o, start, last, ft, early, late, done, accTarget, versions, n: mine.length, v0: vAt(start), v1: vAt(last) };
   });
   return (
     <main className="console runs">
@@ -62,6 +63,7 @@ export default async function Runs({ searchParams }: { searchParams: Promise<Rec
             <th>Duration</th>
             <th>Accounts</th>
             <th>First-try pass</th>
+            <th>Playbook</th>
             <th>Harness changes</th>
           </tr>
         </thead>
@@ -69,7 +71,8 @@ export default async function Runs({ searchParams }: { searchParams: Promise<Rec
           {rows.map((r) => (
             <tr key={String(r.o._id)}>
               <td className="rtask">
-                <b>{String(r.o.task ?? (r.n ? "outreach" : "—"))}</b>
+                <b>{r.o.batch != null ? `Batch ${r.o.batch}` : String(r.o.task ?? (r.n ? "outreach" : "—"))}</b>
+                {r.o.campaign ? <span className="rsub"> · {String(r.o.campaign)}</span> : null}
                 <div className="rsub">{String(r.o.objective ?? "").slice(0, 90)}</div>
               </td>
               <td>{hm(r.o.created_at)}</td>
@@ -88,6 +91,9 @@ export default async function Runs({ searchParams }: { searchParams: Promise<Rec
                 ) : (
                   "—"
                 )}
+              </td>
+              <td className="rate">
+                v{r.v0 ?? "?"} → <b>v{r.v1 ?? "?"}</b>
               </td>
               <td>
                 <div className="vchips">

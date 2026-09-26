@@ -8,7 +8,7 @@ import {
 } from "../Recorder";
 import { fragment } from "@/lib/fragments";
 
-type LiveState = State & { drafts: Doc[]; accounts: Doc[] };
+type LiveState = State & { drafts: Doc[]; accounts: Doc[]; objectives: Doc[] };
 type Raw = { k: number; at: number; coll: string; op: string; text: string };
 
 const ALL_CONTEXT = ["account_name", "account_summary", "account_record_full", "product_catalog"];
@@ -43,26 +43,37 @@ function trimRaw(v: unknown, key = ""): unknown {
 const compact = (v: unknown) => JSON.stringify(v).replace(/"([A-Za-z_][\w.]*)":/g, "$1:").replace(/,(?=[A-Za-z_"{[])/g, ", ");
 
 function useLive(objective: string | null, ready: boolean) {
-  const [s, setS] = useState<LiveState>({ ...EMPTY, drafts: [], accounts: [] });
+  const [s, setS] = useState<LiveState>({ ...EMPTY, drafts: [], accounts: [], objectives: [] });
   const [raw, setRaw] = useState<Raw[]>([]);
   const [status, setStatus] = useState<"connecting" | "live" | "error">("connecting");
   const [loaded, setLoaded] = useState(false);
   const k = useRef(0);
   useEffect(() => {
     if (!ready) return;
-    const es = new EventSource(`/api/stream?${dbQ()}${objective ? `objective=${encodeURIComponent(objective)}` : ""}`);
+    const es = new EventSource(`/api/stream?${dbQ()}series=1&${objective ? `objective=${encodeURIComponent(objective)}` : ""}`);
     es.addEventListener("snapshot", (e) => {
       const d = JSON.parse((e as MessageEvent).data);
-      setS({ ...EMPTY, drafts: [], accounts: [], ...d });
+      // never clear on a new batch: the series snapshot carries every batch since the run started
+      setS({ ...EMPTY, drafts: [], accounts: [], objectives: d.objective ? [d.objective] : [], ...d });
       setStatus("live");
       setLoaded(true);
     });
     es.addEventListener("change", (e) => {
       const ch = JSON.parse((e as MessageEvent).data) as Change;
       setS((prev) => {
-        const base = reduce(prev, ch) as LiveState;
-        const next: LiveState = { ...base, drafts: prev.drafts, accounts: prev.accounts };
-        if (ch.coll === "drafts" && ch.doc && prev.objective && ch.doc.objective_id === prev.objective._id) next.drafts = upsert(prev.drafts, ch.doc, "created_at");
+        const ids = new Set(prev.objectives.map((x) => x._id));
+        const next: LiveState = { ...prev };
+        const key = ch.coll as keyof LiveState;
+        if (ch.coll === "objectives" && ch.doc) {
+          if (ids.has(ch.doc._id)) next.objectives = prev.objectives.map((x) => (x._id === ch.doc!._id ? ch.doc! : x));
+          if (prev.objective?._id === ch.doc._id) next.objective = ch.doc;
+        } else if (ch.coll === "harness_config") {
+          return reduce(prev, ch) as LiveState;
+        } else if (ch.coll !== "accounts" && Array.isArray(prev[key])) {
+          const list = prev[key] as Doc[];
+          if (ch.op === "delete") (next as Doc)[key] = list.filter((d) => d._id !== ch.id);
+          else if (ch.doc && ids.has(ch.doc.objective_id)) (next as Doc)[key] = upsert(list, ch.doc, "created_at");
+        }
         if (ch.coll === "accounts" && ch.doc) {
           const i = prev.accounts.findIndex((a) => a._id === ch.doc!._id);
           const list = i >= 0 ? prev.accounts.map((a, j) => (j === i ? ch.doc! : a)) : [...prev.accounts, ch.doc];
@@ -171,7 +182,7 @@ function ShapePanel({ s, now }: { s: LiveState; now: number }) {
   const d = diffOf(cfg, s);
   const flashing = !!flash && flash.v === cfg.version && now < flash.until;
   // last kept/undone verdict on any version (the change the current one may have replaced)
-  const lastVerdict = [...s.harness_config].reverse().find((c) => c.outcome?.verdict && t(c.outcome.decided_at) >= t(s.objective?.created_at));
+  const lastVerdict = [...s.harness_config].reverse().find((c) => c.outcome?.verdict && t(c.outcome.decided_at) >= t(s.objectives[0]?.created_at ?? s.objective?.created_at));
   return (
     <section className="panel shape">
       <div className="phead">
@@ -309,7 +320,8 @@ type Item =
   | { kind: "draft"; at: number; d: Doc }
   | { kind: "change"; at: number; c: Doc }
   | { kind: "verdict"; at: number; c: Doc }
-  | { kind: "resume"; at: number; r: Doc };
+  | { kind: "resume"; at: number; r: Doc }
+  | { kind: "batch"; at: number; ob: Doc; prev: Doc | null };
 
 function Json({ doc, title, onOpen }: { doc: Doc | undefined | null; title: string; onOpen: (t: string, d: Doc) => void }) {
   if (!doc) return null;
@@ -476,6 +488,57 @@ function Drawer({ open, onClose }: { open: { title: string; doc: Doc } | null; o
   );
 }
 
+// ---------- batches (--continuous: one objective per batch, one global playbook) ----------
+const versionAt = (cfgs: Doc[], at: number) => [...cfgs].filter((c) => t(c.created_at) <= at + 1000).sort((a, b) => b.version - a.version)[0]?.version ?? null;
+function batchStats(s: LiveState, ob: Doc) {
+  const mine = s.drafts.filter((d) => d.objective_id === ob._id);
+  const ft = mine.filter((d) => (d.attempt ?? 1) <= 1);
+  const pass = ft.filter((d) => d.qa?.pass).length;
+  const accounts = new Set(mine.filter((d) => d.qa?.pass || (d.attempt ?? 1) >= 2).map((d) => d.account)).size;
+  const target = ((ob.bearings ?? []) as Doc[]).find((b) => b.name === "accounts_done")?.target ?? null;
+  return { n: ft.length, pass, rate: ft.length ? pass / ft.length : null, accounts, target, written: mine.length };
+}
+const batchLabel = (ob: Doc, i?: number) => (ob.batch != null ? `Batch ${ob.batch}` : `Run ${i != null ? i + 1 : ""}`.trim());
+
+function BatchDivider({ ob, prev, s, onOpen }: { ob: Doc; prev: Doc | null; s: LiveState; onOpen: (t: string, d: Doc) => void }) {
+  const v = versionAt(s.harness_config, t(ob.created_at));
+  const ps = prev ? batchStats(s, prev) : null;
+  return (
+    <div className="divider batch">
+      <span className="dvl" />
+      <span className="dvt">
+        <b>{batchLabel(ob, s.objectives.indexOf(ob)).toUpperCase()}</b>
+        {ob.campaign ? ` · ${String(ob.campaign)}` : ""} · started on playbook v{v ?? "?"}{prev ? " (learned)" : ""}
+        {prev && ps && (
+          <>
+            {" "}· {batchLabel(prev).toLowerCase()} finished: {ps.accounts}{ps.target ? `/${ps.target}` : ""} · first-try <b className={rateCls(ps.rate)}>{pct(ps.rate)}</b>
+          </>
+        )}
+      </span>
+      <Json doc={ob} title={`objectives · ${batchLabel(ob)}`} onOpen={onOpen} />
+      <span className="dvl" />
+    </div>
+  );
+}
+
+function BatchRates({ s, target, written }: { s: LiveState; target: number; written: number }) {
+  const rows = s.objectives.map((ob, i) => ({ ob, i, st: batchStats(s, ob) })).filter((r) => r.st.n > 0 || r.ob._id === s.objective?._id);
+  if (!rows.length) return null;
+  return (
+    <div className="batchrates">
+      <div className="mk">First-try pass by batch <span className="dimtxt">· {written} emails written</span></div>
+      {rows.map(({ ob, i, st }) => (
+        <div key={ob._id} className={`brow ${ob._id === s.objective?._id ? "cur" : ""}`}>
+          <span className="bl">{batchLabel(ob, i)}</span>
+          <span className="bt"><i className={rateCls(st.rate)} style={{ width: `${Math.round((st.rate ?? 0) * 100)}%` }} /><b style={{ left: `${target}%` }} /></span>
+          <span className={`bv ${rateCls(st.rate)}`}>{pct(st.rate)}</span>
+          <span className="bn">{st.pass}/{st.n}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function Live() {
   const [ready, setReady] = useState(false);
   const [pin, setPin] = useState<string | null>(null);
@@ -509,14 +572,29 @@ export default function Live() {
 
   const items = useMemo(() => {
     const out: Item[] = s.drafts.map((d) => ({ kind: "draft" as const, at: t(d.created_at), d }));
-    const since = t(o?.created_at);
+    const since = t(s.objectives[0]?.created_at ?? o?.created_at);
+    s.objectives.forEach((ob, i) => out.push({ kind: "batch", at: t(ob.created_at), ob, prev: s.objectives[i - 1] ?? null }));
     for (const c of s.harness_config) {
       if (c.change && t(c.created_at) >= since) out.push({ kind: "change", at: t(c.created_at), c });
       if (c.outcome?.decided_at && t(c.outcome.decided_at) >= since) out.push({ kind: "verdict", at: t(c.outcome.decided_at), c });
     }
-    for (const r of s.resumes) out.push({ kind: "resume", at: t(r.created_at), r });
+    for (const r of s.resumes) {
+      const ob = s.objectives.find((x) => x._id === r.objective_id);
+      if (ob && Math.abs(t(r.created_at) - t(ob.created_at)) < 60_000) continue; // the batch divider already marks the start
+      out.push({ kind: "resume", at: t(r.created_at), r });
+    }
     return out.sort((a, b) => b.at - a.at);
-  }, [s.drafts, s.harness_config, s.resumes, o?.created_at]);
+  }, [s.drafts, s.harness_config, s.resumes, s.objectives, o?.created_at]);
+  const [limit, setLimit] = useState(60);
+  const shown = useMemo(() => {
+    let n = 0;
+    const out: Item[] = [];
+    for (const it of items) {
+      if (it.kind === "draft" && ++n > limit) break;
+      out.push(it);
+    }
+    return { list: out, more: n > limit };
+  }, [items, limit]);
 
   // previous submit by the same worker → per-draft duration
   const prevAt = useMemo(() => {
@@ -524,7 +602,10 @@ export default function Live() {
     const lastBy = new Map<string, number>();
     for (const d of s.drafts) {
       const w = String(d.worker ?? d.agent ?? "");
-      map.set(d._id, lastBy.get(w) ?? (o ? t(o.created_at) : null));
+      const ob = s.objectives.find((x) => x._id === d.objective_id);
+      const obAt = ob ? t(ob.created_at) : null;
+      const last = lastBy.get(w);
+      map.set(d._id, last != null && (obAt == null || last >= obAt) ? last : obAt);
       lastBy.set(w, t(d.created_at));
     }
     return map;
@@ -547,7 +628,10 @@ export default function Live() {
             <div className="divider crash"><span className="dvl" /><span className="dvt"><b>HARNESS PROCESS DOWN</b> · last write {secs(now - t(s.drafts[s.drafts.length - 1]?.created_at))} ago</span><span className="dvl" /></div>
           )}
           {loaded && o && items.length === 0 && <div className="empty">objective set — waiting for the first draft…</div>}
-          {items.map((it) =>
+          {shown.list.map((it) =>
+            it.kind === "batch" ? (
+              <BatchDivider key={`b${it.ob._id}`} ob={it.ob} prev={it.prev} s={s} onOpen={onOpen} />
+            ) :
             it.kind === "draft" ? (
               <DraftRow
                 key={it.d._id}
@@ -565,11 +649,16 @@ export default function Live() {
             ) : (
               <div key={`r${it.r._id}`} className="divider resume">
                 <span className="dvl" />
-                <span className="dvt">{Math.abs(it.at - t(o?.created_at)) < 60_000 ? <><b>RUN STARTED</b> · objective set in Atlas · harness v{currentConfig(s.harness_config.filter((c) => t(c.created_at) <= it.at))?.version ?? "?"}</> : <><b>RESUMED</b> · picked up from Atlas{it.r.from_seq != null ? ` at save point #${it.r.from_seq}` : ""}</>}</span>
+                <span className="dvt">{Math.abs(it.at - t(s.objectives.find((x) => x._id === it.r.objective_id)?.created_at)) < 60_000 ? <><b>RUN STARTED</b> · objective set in Atlas · harness v{currentConfig(s.harness_config.filter((c) => t(c.created_at) <= it.at))?.version ?? "?"}</> : <><b>RESUMED</b> · picked up from Atlas{it.r.from_seq != null ? ` at save point #${it.r.from_seq}` : ""}</>}</span>
                 <Json doc={it.r} title="resumes" onOpen={onOpen} />
                 <span className="dvl" />
               </div>
             ),
+          )}
+          {shown.more && (
+            <button className="older" onClick={() => setLimit((n) => n + 60)}>
+              load older drafts ({items.filter((x) => x.kind === "draft").length - limit} more)
+            </button>
           )}
         </div>
       </section>
@@ -586,7 +675,7 @@ export default function Live() {
             <div className="msub">first-try {pct(m.first)} ({m.ftPass}/{m.ftN})</div>
           </div>
           <div className="meter">
-            <div className="mk">Accounts done</div>
+            <div className="mk">{o?.batch != null ? `Batch ${o.batch} · accounts` : "Accounts done"}</div>
             <div className="mv">{m.done}<span className="of">/{m.total || "?"}</span></div>
             <div className="mbar"><i className="acc" style={{ width: `${m.total ? Math.round((m.done / m.total) * 100) : 0}%` }} /></div>
             <div className="msub">
@@ -595,6 +684,7 @@ export default function Live() {
             </div>
           </div>
         </div>
+        <BatchRates s={s} target={target} written={s.drafts.length} />
         <RunControl alive={alive} />
         <ShapePanel s={s} now={now} />
       </aside>

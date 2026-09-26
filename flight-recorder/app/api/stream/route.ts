@@ -11,7 +11,23 @@ const GLOBAL = ["harness_config"] as const;
 const WATCHED = ["objectives", "accounts", ...GLOBAL, ...PER_OBJECTIVE];
 const NO_EMBED = { projection: { embedding: 0 } };
 
-async function snapshot(pinned?: ObjectId | null, dbName?: string | null) {
+/** ?series=1: every objective since the latest batch-1 objective (the harness's --continuous batches share one global playbook). */
+async function seriesOf(db: ReturnType<typeof waypointsDb>, objective: Document): Promise<Document[]> {
+  const start = await db
+    .collection("objectives")
+    .findOne({ batch: 1, created_at: { $lte: objective.created_at } }, { sort: { created_at: -1 }, projection: { created_at: 1 } });
+  if (!start && objective.batch == null) return [objective];
+  const from = start?.created_at ?? objective.created_at;
+  const list = await db
+    .collection("objectives")
+    .find({ created_at: { $gte: from, $lte: objective.created_at } }, NO_EMBED)
+    .sort({ created_at: -1 })
+    .limit(40)
+    .toArray();
+  return list.reverse();
+}
+
+async function snapshot(pinned?: ObjectId | null, dbName?: string | null, series = false) {
   const db = waypointsDb(dbName);
   const objective = pinned
     ? await db.collection("objectives").findOne({ _id: pinned })
@@ -29,12 +45,16 @@ async function snapshot(pinned?: ObjectId | null, dbName?: string | null) {
     for (const c of PER_OBJECTIVE) out[c] = [];
     return out;
   }
-  const limits: Record<string, number> = { checkpoints: 60, events: 150, taps: 40, drafts: 200, failures: 200 };
+  const objs = series ? await seriesOf(db, objective) : [objective];
+  out.objectives = objs;
+  const ids = objs.map((o) => o._id);
+  const k = series ? 4 : 1;
+  const limits: Record<string, number> = { checkpoints: 60 * k, events: 150 * k, taps: 40 * k, drafts: 200 * k, failures: 200 * k, resumes: 50 * k };
   await Promise.all(
     PER_OBJECTIVE.map(async (c) => {
       const docs = await db
         .collection(c)
-        .find({ objective_id: objective._id }, NO_EMBED)
+        .find({ objective_id: { $in: ids } }, NO_EMBED)
         .sort({ created_at: -1 })
         .limit(limits[c] ?? 50)
         .toArray();
@@ -48,6 +68,7 @@ export async function GET(request: Request) {
   const pinParam = new URL(request.url).searchParams.get("objective");
   const pinned = pinParam && ObjectId.isValid(pinParam) ? new ObjectId(pinParam) : null;
   const dbName = dbParam(request);
+  const series = new URL(request.url).searchParams.get("series") === "1";
   const enc = new TextEncoder();
   let stream: ChangeStream | null = null;
   let hb: ReturnType<typeof setInterval> | null = null;
@@ -92,7 +113,7 @@ export async function GET(request: Request) {
         );
         // Open the stream before the snapshot so nothing written in between is lost (client dedupes by _id).
         const first = await stream.tryNext();
-        let snap = await snapshot(pinned, dbName);
+        let snap = await snapshot(pinned, dbName, series);
         let currentId = (snap.objective as Document | null)?._id?.toString() ?? null;
         let currentUpdated = new Date(((snap.objective as Document | null)?.updated_at as Date | undefined) ?? 0);
         send("snapshot", snap);
@@ -104,7 +125,7 @@ export async function GET(request: Request) {
           if (coll === "objectives") {
             if (ch.operationType === "delete") {
               if (id === currentId && !pinned) {
-                snap = await snapshot(null, dbName);
+                snap = await snapshot(null, dbName, series);
                 currentId = (snap.objective as Document | null)?._id?.toString() ?? null;
                 send("snapshot", snap);
               }
@@ -114,7 +135,7 @@ export async function GET(request: Request) {
               if (pinned) return;
               const upd = new Date((doc.updated_at as Date | undefined) ?? 0);
               if (!currentId || ch.operationType === "insert") {
-                snap = await snapshot(doc._id as ObjectId, dbName);
+                snap = await snapshot(doc._id as ObjectId, dbName, series);
                 currentId = id;
                 currentUpdated = upd;
                 send("snapshot", snap);
@@ -122,6 +143,13 @@ export async function GET(request: Request) {
               return;
             }
             if (doc) currentUpdated = new Date((doc.updated_at as Date | undefined) ?? 0);
+            // a fresh --continuous run marks its first objective batch 1 after insert: restart the series there
+            const inSnap = (snap.objectives as Document[] | undefined) ?? [];
+            if (series && doc?.batch === 1 && inSnap.length > 1) {
+              snap = await snapshot(doc._id as ObjectId, dbName, series);
+              send("snapshot", snap);
+              return;
+            }
           }
           send("change", { coll, op: ch.operationType, id, doc: doc ?? null });
         };

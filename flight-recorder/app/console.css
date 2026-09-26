@@ -242,3 +242,15 @@ main.console.trace { display: grid; grid-template-columns: minmax(0, 7fr) minmax
   .bignums .mv { font-size: 34px; }
 }
 .jbtn { white-space: nowrap; flex: 0 0 auto; }
+.divider.batch .dvl { background: var(--brand); height: 4px; }
+.divider.batch .dvt > b:first-child { color: var(--brand); letter-spacing: 0.08em; }
+.older { font: 700 15px var(--sans); color: var(--brand); background: var(--panel); border: 1px dashed var(--line); border-radius: 9px; padding: 10px; cursor: pointer; }
+.batchrates { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px; display: flex; flex-direction: column; gap: 5px; }
+.brow { display: grid; grid-template-columns: 78px minmax(0, 1fr) 50px 52px; gap: 8px; align-items: center; font-size: 15px; }
+.brow.cur .bl { color: var(--brand); font-weight: 800; }
+.brow .bt { position: relative; height: 8px; background: var(--line); border-radius: 4px; }
+.brow .bt i { position: absolute; inset: 0 auto 0 0; border-radius: 4px; background: var(--fg); }
+.brow .bt i.good { background: var(--ok); } .brow .bt i.mid { background: var(--mid); } .brow .bt i.bad { background: var(--fail); }
+.brow .bt b { position: absolute; top: -3px; width: 2px; height: 14px; background: var(--brand); }
+.brow .bv { font-weight: 900; text-align: right; font-variant-numeric: tabular-nums; }
+.brow .bn { color: var(--faint); font-size: 13px; font-family: var(--mono); }
