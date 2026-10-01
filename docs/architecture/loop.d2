@@ -1,0 +1,14 @@
+direction: right
+work: "1 · WORK\nworkers draft under\nthe current playbook"
+grade: "2 · GRADE\ndeterministic QA gate\nat the batch's bar level"
+detect: "3 · DETECT\nsentinel: failure class\nor stall"
+adapt: "4 · ADAPT (trial)\nsurgeon writes one change,\non probation"
+verdict: "5 · VERDICT\nafter ≥3 drafts:\nkept or rolled back"
+raise: "6 · RAISE THE BAR\nbatch closes: raise if\nearned, else hold"
+work -> grade
+grade -> detect
+detect -> adapt
+adapt -> verdict
+verdict -> raise: "batch closes"
+verdict -> work: "next account" {style.stroke-dash: 3}
+raise -> work: "next batch on the learned playbook" {style.stroke-dash: 3}

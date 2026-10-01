@@ -1,0 +1,50 @@
+direction: down
+
+local: Local machine (bun processes) {
+  direction: right
+  harness: "Harness · demo/harness.ts\n--workers 3 --continuous" {
+    w1: worker w1
+    w2: worker w2
+    w3: worker w3
+  }
+  agent_mcp: "Waypoints MCP\n--role agent"
+  sentinel: "Sentinel\nsrc/sentinel.ts"
+  surgeon_mcp: "Waypoints MCP\n--role surgeon"
+  harness <-> agent_mcp: "MCP stdio"
+  sentinel <-> surgeon_mcp: "MCP stdio"
+}
+
+ext: External services {
+  direction: right
+  gb10: "GB10 · vLLM\nglm53-flash (~30 tok/s)"
+  voyage: "Voyage AI\nvoyage-4 + rerank-2.5"
+  or: "OpenRouter\noptional, unused live" {style.stroke-dash: 4}
+}
+
+atlas: "MongoDB Atlas · db waypoints" {
+  direction: right
+  memory: "Memory\nobjectives · checkpoints · decisions\nfailures · memories · resumes · policies"
+  work: "Work\naccounts · drafts · inflight"
+  control: "Control\nharness_config · bars · taps · events"
+  vec: "memories_vec\nvector index"
+}
+
+glass: Glass box {
+  direction: right
+  console: "Console · Next.js :3100\nflight-recorder/"
+  views: "Terminal views\nsrc/views/*"
+  snap: "Snapshot loop\nevery 2 min → ~/waypoints-backups"
+}
+
+local.harness -> ext.gb10: "streamed chat + tools"
+local.agent_mcp -> ext.voyage: "embed · rerank"
+local.sentinel -> ext.or: "Jev advisor (off)" {style.stroke-dash: 4}
+local.harness -> atlas.work: "claim · submit · inflight"
+local.agent_mcp <-> atlas.memory: "read / write"
+local.agent_mcp -> atlas.control: "settings · ack taps"
+atlas.memory -> local.sentinel: "change stream\nfailures + checkpoints"
+local.sentinel -> atlas.control: "taps"
+local.surgeon_mcp -> atlas.control: "transactions"
+atlas -> glass.console: "change streams → SSE"
+atlas -> glass.views: "change streams"
+atlas -> glass.snap: "read-only EJSON"

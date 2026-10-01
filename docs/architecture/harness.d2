@@ -1,0 +1,23 @@
+direction: down
+boot: "boot: set_objective (fresh / next batch)\n→ resume → get_settings → shape"
+loop: Each worker, per account {
+  reload: "reload settings\n(shared shape, serialized)"
+  claim: "next_account\natomic findOneAndUpdate claim"
+  view: "accountView(context_sources)"
+  model: "model turns (≤5), streamed\nvisible tools = granted + submit_email"
+  submit: "submit_email → qa() → drafts"
+  pass: pass? {shape: diamond}
+  retry: "one retry with\nfailure details"
+  log: "log_failure per QA class\n+ checkpoint (measured bearings)"
+  reload -> claim -> view -> model -> submit -> pass
+  pass -> log: yes / final attempt
+  pass -> retry: "no, attempt 1"
+  retry -> model
+  log -> reload: next account
+}
+batch: "--continuous: all workers idle\n→ close objective → settleBar\n→ loadNextBatch → openObjective"
+inflight: "inflight doc per worker\n(≤ every 300 ms)" {shape: cylinder}
+boot -> loop.reload
+loop.claim -> batch: queue empty {style.stroke-dash: 3}
+batch -> loop.reload: next batch
+loop.model -> inflight: tokens, reasoning, partial draft {style.stroke-dash: 3}

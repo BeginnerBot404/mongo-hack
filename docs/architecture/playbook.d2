@@ -1,0 +1,13 @@
+direction: right
+active: "active\n(seed v1 or restored)"
+probation: "probation\n(new version, 1 field changed)"
+kept: kept
+rolled: rolled_back
+restored: "new active version\n= parent's settings"
+superseded: superseded
+active -> probation: "apply_settings_change\n(gate + transaction)"
+probation -> kept: "≥3 drafts under vN:\nclass rate ↓ and first-try ≥ before"
+probation -> rolled: "otherwise"
+rolled -> restored: "same transaction"
+kept -> superseded: "next change"
+restored -> superseded: "next change"

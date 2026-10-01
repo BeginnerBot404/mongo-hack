@@ -1,0 +1,23 @@
+direction: right
+harness: Harness
+agent: "MCP agent role"
+atlas: Atlas {
+  cp: checkpoints
+  fl: failures
+  mem: "memories\n(+ embedding)"
+  obj: objectives
+  taps: taps
+  cfg: harness_config
+}
+voyage: "Voyage\nvoyage-4 · rerank-2.5"
+harness -> agent: "checkpoint(settings_version)"
+agent -> atlas.cp: insert
+agent -> atlas.fl: "auto regression\nif bearing dropped"
+agent -> atlas.mem: remember()
+agent -> voyage: embed (4s timeout, no retry)
+agent -> atlas.taps: ack newest open tap
+agent -> atlas.cfg: "current version\n→ reload flag"
+agent -> harness: "{settings: {reload}, tap, end_state}"
+recall: "recall(query)"
+recall -> atlas.mem: "\$vectorSearch\n(top 20, filter kind/objective)"
+recall -> voyage: rerank → top k

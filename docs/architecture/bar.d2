@@ -1,0 +1,15 @@
+direction: right
+close: "batch closes\nfirst_try_pct, reached"
+earned: "reached (all done, first-try ≥ target)\nAND level/target would change?" {shape: diamond}
+raise: "insert bars v+1\nlevel = min(4, L+1)\ntarget = min(95, max(T, round(pct)+5))\nold bar → superseded"
+hold: "bar held"
+ev1: "events: bar_raised" {shape: cylinder}
+ev2: "events: bar_held" {shape: cylinder}
+next: "next objective\nbar_version = active bar"
+close -> earned
+earned -> raise: yes
+earned -> hold: no
+raise -> ev1
+hold -> ev2
+ev1 -> next
+ev2 -> next

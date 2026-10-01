@@ -49,7 +49,9 @@
     "view:drafts": "bun run src/views/drafts.ts",
     "load:accounts": "bun run scripts/load-accounts.ts",
     "outreach:smoke": "bun run scripts/outreach-smoke.ts",
-    "test:all": "bun test --preload ./tests/preload.ts tests/"
+    "test:all": "bun test --preload ./tests/preload.ts tests/",
+    "pause": "bun run scripts/pause.ts",
+    "resume": "bun run scripts/resume.ts"
   },
   "engines": {
     "bun": ">=1.4"

@@ -1,0 +1,10 @@
+direction: right
+playbook: "Playbook · harness_config\nHOW it works\nrules · context · guardrail · tools · reasoning"
+bar: "Bar · bars\nWHAT counts as good\nQA level 1–4 + target %"
+endstate: "objective.end_state\nimmutable destination\n(one per batch)"
+surgeon: "Surgeon\n(any time, on trial)" {shape: oval}
+settle: "settleBar\n(batch close, only if earned)" {shape: oval}
+surgeon -> playbook: "new version"
+settle -> bar: "new version"
+playbook -> bar: "changes to meet"
+bar -> endstate: "locks target + level"

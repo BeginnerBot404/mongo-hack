@@ -1,0 +1,25 @@
+direction: down
+cs: "change stream: inserts on failures | checkpoints\n→ serial queue, one event at a time"
+fail: "failure (outreach)"
+cp: "checkpoint (outreach)"
+risk: "risk = 0.3·recurrence + 0.3·trend\nsimilarity recorded as 0 for outreach"
+tap: "taps doc (always written)\nopen if risk ≥ threshold (0.25)" {shape: cylinder}
+thr: "tap?" {shape: diamond}
+plan: "planOutreachChange(class, settings)\nor reasoning on (fix already kept / stall)"
+prob: "a version on probation?" {shape: diamond}
+queue: "outreachQueue (FIFO)"
+apply: "surgeon: apply_settings_change\n→ new version on probation"
+eval: "surgeon: evaluate_probation"
+stall: "stall? last 4 checkpoints within ±2 pts,\nbelow target, reasoning off" {shape: diamond}
+cs -> fail
+cs -> cp
+fail -> risk -> tap -> thr
+thr -> plan: yes
+plan -> prob
+prob -> queue: yes
+prob -> apply: no
+cp -> eval
+cp -> stall
+stall -> tap: yes (trend 0.6)
+eval -> queue: "verdict in → drain,\nstop at first applied" {style.stroke-dash: 3}
+queue -> apply {style.stroke-dash: 3}
